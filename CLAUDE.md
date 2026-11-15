@@ -267,6 +267,10 @@ are the global hackathon's rules? Push access to the repo is needed for PRs.
 
 ## 11. Rooms per office type (sign-up)
 
+Full design of every room (agents, what starts them, where a person decides, hands-to, never) and the best-case
+story: `docs/rooms-and-agents.md`. It is **generated**: edit `docs/mockups/rooms-data.js` (or the room list in the
+sign-up mockup), then run `node scripts/build-rooms-doc.mjs`. Never edit the .md by hand.
+
 Every office: Front Desk, Approvals, Finance, Compliance, Records.
 
 | Office type | Adds |

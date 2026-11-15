@@ -108,7 +108,51 @@ canvas#stage:active{cursor:grabbing}
 .hint{position:absolute;right:16px;bottom:18px;font-size:11.5px;color:var(--faint)}
 .verified{position:absolute;right:16px;top:14px;padding:8px 12px;border-radius:12px;background:rgba(130,217,159,.14);border:1px solid rgba(130,217,159,.4);color:var(--green);font-weight:600;font-size:13px;opacity:0;transition:.3s}
 .verified.show{opacity:1}
+/* follow-a-fix button and the room view panel */
+.follow{position:absolute;right:16px;top:14px;border:1px solid rgba(232,199,122,.5);background:rgba(232,199,122,.14);color:var(--gold-2);border-radius:12px;padding:9px 14px;font-weight:600;font-size:13px}
+.follow:hover{background:rgba(232,199,122,.24)}
+.follow[hidden]{display:none}
+.rback{border:1px solid var(--line-2);background:transparent;border-radius:8px;padding:6px 12px;font-size:12.5px;font-weight:600;color:var(--muted)}
+.rback:hover{color:var(--ink);border-color:var(--gold)}
+.rsec{margin-top:18px}
+.rsec h3{font:600 11px var(--font);letter-spacing:1.6px;text-transform:uppercase;color:var(--muted);margin:0 0 8px}
+.rsec ul{margin:0;padding-left:18px;color:var(--ink);font-size:13px}
+.rsec li{margin:3px 0}
+.never li::marker{content:"✕  ";color:var(--bad)}
+.agent{width:100%;text-align:left;display:flex;align-items:center;gap:10px;border:1px solid var(--line-2);background:var(--bg-2);border-radius:12px;padding:10px 12px;margin-bottom:8px}
+.agent:hover{border-color:var(--teal)}
+.agent[aria-expanded="true"]{border-color:var(--teal);border-bottom-left-radius:0;border-bottom-right-radius:0;margin-bottom:0}
+.agent b{flex:1}
+.acard{border:1px solid var(--teal);border-top:0;border-radius:0 0 12px 12px;padding:10px 12px 12px;margin-bottom:8px;background:rgba(92,207,181,.05);font-size:13px}
+.acard p{margin:0 0 8px}
+.acard .lbl{display:block;font-size:11px;color:var(--muted);margin:8px 0 3px;letter-spacing:.4px}
+.tools{display:flex;flex-wrap:wrap;gap:5px}
+.tools span{font:500 11px var(--mono);background:var(--raise);border:1px solid var(--line-2);border-radius:6px;padding:2px 7px}
+.st{font-size:11.5px;font-weight:600;padding:2px 8px;border-radius:99px;white-space:nowrap}
+.st-working{color:var(--teal);background:var(--ai)}
+.st-waiting{color:var(--warn);background:var(--warn-soft)}
+.st-idle{color:var(--muted);background:var(--raise)}
+.wait{display:flex;gap:10px;align-items:center;justify-content:space-between;padding:9px 12px;border:1px solid rgba(240,179,94,.35);background:var(--warn-soft);border-radius:10px;margin-bottom:6px;font-size:13px}
+.wait small{display:block;color:var(--muted);font-size:11.5px}
+.wait.done{border-color:rgba(130,217,159,.4);background:rgba(130,217,159,.1)}
+.feed{font:12px/1.6 var(--mono);color:var(--muted)}
+.feed div:first-child{color:var(--ink)}
+.hands{display:flex;flex-wrap:wrap;gap:6px}
+.hands button{border:1px solid var(--line-2);background:var(--bg-2);border-radius:99px;padding:5px 11px;font-size:12.5px;font-weight:600}
+.hands button:hover{border-color:var(--gold)}
+.offnote{margin-top:12px;padding:10px 12px;border:1px dashed var(--line-2);border-radius:10px;font-size:13px;color:var(--muted)}
+.story{margin-top:12px;padding:12px;border-radius:12px;border:1px solid rgba(232,199,122,.45);background:var(--gold-soft)}
+.story .k{font-size:10.5px}
+.story h2{font-family:var(--display);font-weight:400;font-size:22px;margin:4px 0}
+.story p{margin:0 0 10px;font-size:13px}
+.story .ctl{display:flex;gap:6px;flex-wrap:wrap}
+.story .ctl button{border:1px solid var(--line-2);background:var(--bg-2);border-radius:8px;padding:5px 10px;font-size:12.5px;font-weight:600}
+.story .bar{height:3px;background:var(--line-2);border-radius:2px;margin:0 0 10px;overflow:hidden}
+.story .bar i{display:block;height:100%;background:var(--gold)}
+.twist{margin-top:10px;padding:10px 12px;border-radius:10px;border:1px solid rgba(242,125,125,.45);background:var(--bad-soft);font-size:13px}
+.twist ol{margin:6px 0 8px;padding-left:18px}
 </style>
+<script src="rooms-data.js"></script>
 </head>
 <body>
 <header class="top">
@@ -133,6 +177,7 @@ canvas#stage:active{cursor:grabbing}
     <canvas id="stage" aria-label="3D view"></canvas>
     <div class="hud"><div class="k"><span class="live"></span><span id="hud-k">Your office, building itself</span></div><h2 id="hud-h">Sample Properties</h2><p id="hud-p">Each room you turn on appears here, with its agents.</p></div>
     <div class="verified" id="verified">✓ Camera confirmed</div>
+    <button class="follow" id="follow" title="Play the best case, room to room">▶ Follow a fix</button>
     <div class="caption" id="caption">Drag to turn the view</div>
     <div class="hint">Drag to rotate · scroll to zoom</div>
   </div>
@@ -151,16 +196,29 @@ function resize(){ const r=cv.getBoundingClientRect(); DPR=Math.min(2,window.dev
 window.addEventListener('resize',resize);
 const cam={yaw:0.75,pitch:0.62,zoom:1,auto:true};
 let drag=null;
-cv.addEventListener('pointerdown',e=>{drag={x:e.clientX,yaw:cam.yaw};cam.auto=false;cv.setPointerCapture(e.pointerId);});
-cv.addEventListener('pointermove',e=>{ if(drag) cam.yaw=drag.yaw+(e.clientX-drag.x)*0.008; });
-cv.addEventListener('pointerup',()=>{drag=null;});
+cv.addEventListener('pointerdown',e=>{drag={x:e.clientX,y:e.clientY,yaw:cam.yaw,moved:false};cv.setPointerCapture(e.pointerId);});
+cv.addEventListener('pointermove',e=>{
+  if(drag){ if(Math.abs(e.clientX-drag.x)>5) { drag.moved=true; cam.auto=false; } if(drag.moved) cam.yaw=drag.yaw+(e.clientX-drag.x)*0.008; return; }
+  const p=local(e); cv.style.cursor = mode==='office' && (view==='office'?hitRoom(p):hitAgent(p))!=null ? 'pointer' : 'grab';
+});
+cv.addEventListener('pointerup',e=>{ const d=drag; drag=null; if(!d||d.moved||mode!=='office') return;
+  const p=local(e);
+  if(view==='office'){ const k=hitRoom(p); if(k) openRoom(k); }
+  else { const i=hitAgent(p); if(i!=null){ RV.agent=i; renderRoomPanel(); } }
+});
+function local(e){ const r=cv.getBoundingClientRect(); return {x:e.clientX-r.left, y:e.clientY-r.top}; }
+function bbox(pts){ return {x0:Math.min(...pts.map(p=>p.x)),x1:Math.max(...pts.map(p=>p.x)),y0:Math.min(...pts.map(p=>p.y)),y1:Math.max(...pts.map(p=>p.y))}; }
+function inBox(b,p){ return b && p.x>=b.x0 && p.x<=b.x1 && p.y>=b.y0 && p.y<=b.y1; }
+function nearest(list,p){ let best=null,bd=1e9; for(const [k,b] of list){ if(!inBox(b,p)) continue; const d=Math.hypot((b.x0+b.x1)/2-p.x,(b.y0+b.y1)/2-p.y); if(d<bd){bd=d;best=k;} } return best; }
+function hitRoom(p){ return nearest(ROOMS.map(r=>[r.key,r._hit]),p); }
+function hitAgent(p){ return nearest((RV.hits||[]).map((b,i)=>[i,b]),p); }
 cv.addEventListener('wheel',e=>{e.preventDefault();cam.zoom=Math.max(.6,Math.min(1.8,cam.zoom*(e.deltaY>0?.92:1.08)));},{passive:false});
 
 function proj(x,y,z){
   const cy_=Math.cos(cam.yaw), sy=Math.sin(cam.yaw), cp=Math.cos(cam.pitch), sp=Math.sin(cam.pitch);
   const xr=x*cy_-z*sy, zr=x*sy+z*cy_;
   const yr=y*cp-zr*sp, zd=y*sp+zr*cp;
-  const s=Math.min(W,H)/(mode==='office'?27:20)*cam.zoom;
+  const s=Math.min(W,H)/(mode==='office'&&view==='office'?27:20)*cam.zoom;
   return {x:W/2+xr*s, y:H*0.58-yr*s, d:zd};
 }
 function hex(c){ const n=parseInt(c.slice(1),16); return [n>>16&255,n>>8&255,n&255]; }
@@ -291,6 +349,8 @@ function officeItems(time){
     const lit=r.h>0.35;
     if(r.on) it.push({t:'line',a:proj(0,0.02,0),b:proj(r.x,0.02,r.z),c:shade(c,1,0.28),dash:[4,4],d:-98});
     it.push(...boxFaces({x:r.x,y:0,z:r.z,w:1.8,h:r.h,d:1.8,c,a:lit?0.9:0.2,edge:shade(c,1.1,lit?0.9:0.3)}));
+    // where this room sits on screen, so a click can open it
+    r._hit=bbox([[-.9,-.9],[.9,-.9],[.9,.9],[-.9,.9]].flatMap(([dx,dz])=>[proj(r.x+dx,0,r.z+dz),proj(r.x+dx,Math.max(r.h,0.5),r.z+dz)]));
     if(lit){
       // desk + screen inside top
       it.push(...boxFaces({x:r.x,y:r.h,z:r.z,w:0.9,h:0.1*r.h,d:0.45,c:'#0f131c',edge:shade(c,1,.6)}));
@@ -355,13 +415,65 @@ function userItems(time){
   return it;
 }
 
-let mode='office';
+/* =========================================================
+   ROOM scene: inside one room, one desk per agent
+   ========================================================= */
+const RD=window.ROOM_DETAIL||{}, STORY=window.STORY||[];
+const RV={room:null, agent:0, papers:[], spawn:0, hits:[], story:-1, playing:false, twist:false, done:{}};
+const STATUS_TXT={working:'● working',waiting:'● waiting for a person',idle:'● idle'};
+function roomIsOn(k){ return RV.story>=0 || !!S.rooms[k]; }
+function deskXs(n){ return n===1?[0]:n===2?[-2.5,2.5]:[-3.9,0,3.9]; }
+function trunc(s,n){ return s.length>n ? s.slice(0,n-1)+'…' : s; }
+function agentNow(i){ const st=RV.story>=0?STORY[RV.story]:null; const a=RD[RV.room].agents[i];
+  if(st && st.agent===i) return {now:st.now, status:'working'}; return {now:a.now, status:a.status}; }
+function roomItems(time){
+  const it=[]; const r=ROOMS.find(x=>x.key===RV.room), det=RD[RV.room], zc=ZONE[r.zone].c, on=roomIsOn(r.key);
+  ambient=on?1:0.5;
+  it.push(...boxFaces({x:0,y:-0.3,z:0,w:13,h:0.3,d:10,c:'#1b2130',bias:-100}));
+  for(let g=-5;g<=5;g+=1) it.push({t:'line',a:proj(-6.5,0.01,g),b:proj(6.5,0.01,g),c:'rgba(255,255,255,.04)',d:-99});
+  it.push(...boxFaces({x:0,y:0,z:-5.1,w:13,h:5,d:0.2,c:'#222a3a',bias:-60}));
+  it.push(...boxFaces({x:-6.6,y:0,z:0,w:0.2,h:5,d:10,c:'#1e2534',bias:-60}));
+  // name plate on the back wall
+  it.push({t:'face',pts:[proj(-3.4,3.4,-4.98),proj(3.4,3.4,-4.98),proj(3.4,4.6,-4.98),proj(-3.4,4.6,-4.98)],d:-40,fill:'#0f131c',stroke:shade(zc,1,.6),
+    lines:[[r.name,'600 15px Inter, sans-serif',zc],[`${ZONE[r.zone].name} · ${det.agents.length} agent${det.agents.length>1?'s':''}${on?'':' · room off'}`,'500 11px Inter, sans-serif','#8b92a3']]});
+  // the door, and where work goes next
+  it.push(...boxFaces({x:6.3,y:0,z:3.4,w:0.2,h:2.8,d:1.8,c:'#2b3346',edge:shade(zc,1,.35),bias:-20}));
+  const hands=det.hands.map(k=>ROOMS.find(x=>x.key===k).name);
+  it.push({t:'label',p:proj(6.3,0.05,5.2),s:'→ '+hands.slice(0,2).join(', ')+(hands.length>2?' …':''),c:shade(zc,1,.6),d:85,f:'500 11px Inter, sans-serif'});
+  const xs=deskXs(det.agents.length); RV.hits=[];
+  det.agents.forEach((a,i)=>{
+    const x=xs[i], z=-1.6, fz=z+1.5, {now,status}=agentNow(i);
+    const sc=!on?'#5d6476':status==='working'?'#5ccfb5':status==='waiting'?'#f0b35e':'#8b92a3';
+    it.push(...boxFaces({x,y:0,z,w:2.8,h:0.9,d:1.1,c:'#3a3326',edge:'rgba(232,199,122,.2)'}));
+    const mz=z-0.35, blink=status==='working'&&on ? 0.85+0.15*Math.sin(time*4+i) : 1;
+    it.push({t:'face',pts:[proj(x-1.25,1.0,mz),proj(x+1.25,1.0,mz),proj(x+1.25,2.45,mz),proj(x-1.25,2.45,mz)],d:proj(x,1.6,mz).d,
+      fill:on?shade('#16202b',blink):'#07090d',stroke:sc,
+      lines:on?[[a.name,'600 12px Inter, sans-serif',zc],[trunc(now,24),'500 10.5px Inter, sans-serif','#cfd6e4'],[STATUS_TXT[status],'600 10.5px Inter, sans-serif',sc]]:[[a.name,'600 12px Inter, sans-serif','#5d6476'],['Room is off','500 10.5px Inter, sans-serif','#5d6476']]});
+    // the agent
+    it.push(...boxFaces({x,y:0,z:fz,w:0.62,h:1.25,d:0.45,c:on?zc:'#5d6476'}));
+    const hp=proj(x,1.55,fz); it.push({t:'dot',p:hp,r:7,c:on?'#e8d3b0':'#6b7080',d:hp.d+0.1});
+    if(RV.agent===i){ const q=[proj(x-0.8,0.02,fz-0.7),proj(x+0.8,0.02,fz-0.7),proj(x+0.8,0.02,fz+0.7),proj(x-0.8,0.02,fz+0.7)];
+      for(let k=0;k<4;k++) it.push({t:'line',a:q[k],b:q[(k+1)%4],c:shade(zc,1,.9),w:2,d:-50}); }
+    if(RV.story>=0 && STORY[RV.story].agent===i) it.push({t:'label',p:proj(x+0.9,1.05,z+0.3),s:'F2 · Al Noor',c:'rgba(232,199,122,.9)',tc:'#f6e2ae',d:95,f:'600 11px Inter, sans-serif'});
+    RV.hits[i]=bbox([proj(x-1.4,0,z-0.6),proj(x+1.4,0,z-0.6),proj(x-1.4,0,fz+0.4),proj(x+1.4,0,fz+0.4),proj(x-1.4,2.5,z-0.6),proj(x+1.4,2.5,z-0.6),proj(x-1.4,2.5,fz+0.4),proj(x+1.4,2.5,fz+0.4)]);
+  });
+  // papers: work coming in at the door and going out to the next room
+  if(on){ if(--RV.spawn<=0){ RV.spawn=45+Math.random()*45; const i=Math.floor(Math.random()*xs.length), inb=Math.random()<.5;
+    const desk={x:xs[i],y:1.0,z:-1.0}, door={x:6.1,y:1.3,z:3.4}; RV.papers.push({a:inb?door:desk,b:inb?desk:door,t:0}); } }
+  RV.papers=RV.papers.filter(p=>p.t<1);
+  for(const p of RV.papers){ p.t+=0.011; const k=p.t;
+    const q=proj(p.a.x+(p.b.x-p.a.x)*k, p.a.y+(p.b.y-p.a.y)*k+Math.sin(k*Math.PI)*0.9, p.a.z+(p.b.z-p.a.z)*k);
+    it.push({t:'dot',p:q,r:3.6,c:'#f6e2ae',glow:'rgba(246,226,174,.18)',d:q.d}); }
+  return it;
+}
+
+let mode='office', view='office';
 function frame(t){
   const time=t/1000;
   if(cam.auto) cam.yaw+=0.0016;
   ctx.clearRect(0,0,W,H);
   ambient=1;
-  drawItems(mode==='office'?officeItems(time):userItems(time));
+  drawItems(mode==='office' ? (view==='room'?roomItems(time):officeItems(time)) : userItems(time));
   requestAnimationFrame(frame);
 }
 
@@ -495,19 +607,118 @@ function syncScene(){
   }
 }
 function setMode(m){
+  if(view==='room'){ stopStory(); clearInterval(feedTimer); view='office'; RV.room=null; $('#progress').style.display=''; document.querySelector('.nav').style.display=''; }
+  $('#follow').hidden = m!=='office';
   mode=m; step=0; cam.auto=true; cam.yaw=m==='office'?0.75:0.55;
   $('#m-office').setAttribute('aria-pressed',m==='office'); $('#m-user').setAttribute('aria-pressed',m==='user');
   caption(m==='office'?'Pick your office type to start':'Join with the code your building or company sent you');
   render();
 }
+/* =========================================================
+   Room view: open a room, its panel, and "Follow a fix"
+   ========================================================= */
+const roomName=k=>ROOMS.find(r=>r.key===k).name;
+function hhmm(){ return new Date().toTimeString().slice(0,5); }
+let feedTimer=null, storyTimer=null;
+function openRoom(k, keepStory){
+  if(!RD[k]) return;
+  if(!keepStory) stopStory();
+  view='room'; RV.room=k; RV.agent=(RV.story>=0?STORY[RV.story].agent:0); RV.papers=[]; RV.twist=false;
+  RV.feed=RD[k].feed.slice().reverse();
+  cam.auto=false; cam.yaw=0.5; cam.pitch=0.62; cam.zoom=1;
+  $('#progress').style.display='none'; document.querySelector('.nav').style.display='none';
+  $('#follow').hidden=true;
+  const r=ROOMS.find(x=>x.key===k);
+  $('#hud-k').textContent=ZONE[r.zone].name+' · inside the room';
+  $('#hud-h').textContent=r.name;
+  $('#hud-p').textContent=roomIsOn(k)?`${RD[k].agents.length} agent${RD[k].agents.length>1?'s':''} at work · papers show work coming in and going out`:'This room is off for your office. You can turn it on.';
+  caption('Click an agent to see its card · Esc goes back to the office');
+  renderRoomPanel();
+  clearInterval(feedTimer); feedTimer=setInterval(tickFeed,3200);
+}
+function closeRoom(){
+  stopStory(); clearInterval(feedTimer);
+  view='office'; RV.room=null; cam.auto=true; cam.yaw=0.75; cam.zoom=1;
+  $('#progress').style.display=''; document.querySelector('.nav').style.display='';
+  render(); caption('Click any room to go inside · ▶ Follow a fix plays the best case');
+}
+function tickFeed(){
+  if(view!=='room' || !roomIsOn(RV.room)) return;
+  const det=RD[RV.room], a=det.agents[Math.floor(Math.random()*det.agents.length)];
+  RV.feed.unshift(`${hhmm()} ${a.name}: ${a.last[Math.floor(Math.random()*a.last.length)]}`);
+  RV.feed=RV.feed.slice(0,6);
+  const f=$('#r-feed'); if(f) f.innerHTML=RV.feed.map(l=>`<div>${l}</div>`).join('');
+}
+function renderRoomPanel(){
+  const k=RV.room, det=RD[k], r=ROOMS.find(x=>x.key===k), zn=ZONE[r.zone], on=roomIsOn(k);
+  const st=RV.story>=0?STORY[RV.story]:null;
+  $('#panel').innerHTML=`
+    <button class="rback" id="r-back">← Back to the office</button>
+    <div class="k" style="margin-top:16px;color:${zn.c}">${zn.name}</div><h1>${r.name}</h1>
+    <p class="sub">${r.desc}.</p>
+    ${st?`<div class="story"><div class="k">Follow a fix · step ${RV.story+1} of ${STORY.length}</div>
+      <h2>${st.title}</h2><div class="bar"><i style="width:${Math.round(100*(RV.story+1)/STORY.length)}%"></i></div><p>${st.text}</p>
+      <div class="ctl"><button id="s-prev" ${RV.story===0?'disabled':''}>◀ Back</button><button id="s-play">${RV.playing?'⏸ Pause':'▶ Play'}</button>
+      <button id="s-next">${RV.story===STORY.length-1?'Finish':'Next ▶'}</button><button id="s-end">✕ End</button></div>
+      ${st.twist?`<div style="margin-top:10px"><button class="rback" id="s-twist">What if the bank details change?</button></div>`:''}
+      ${RV.twist?`<div class="twist"><b>Not the best case: the contractor changes bank details</b><ol>
+        <li>The bank account is a pinned fact of this payment, so the payment approval is <b>cancelled by itself</b>.</li>
+        <li>Compliance is alerted first; Finance shows “Stopped: bank details changed”.</li>
+        <li>The compliance officer verifies the new account by phone.</li>
+        <li>Only then is the owner asked to approve again, now pinned to the new account.</li></ol>
+        <button class="rback" id="s-untwist">Back to the best case</button></div>`:''}
+    </div>`:''}
+    ${on?'':`<div class="offnote">This room is off for your office type. <button class="rback" id="r-on" style="margin-left:6px">Turn on this room</button></div>`}
+    <div class="rsec"><h3>Starts when</h3><ul>${det.starts.map(s=>`<li>${s}</li>`).join('')}</ul></div>
+    <div class="rsec"><h3>Agents</h3>${det.agents.map((a,i)=>{ const {now,status}=agentNow(i), open=RV.agent===i;
+      return `<button class="agent" data-agent="${i}" aria-expanded="${open}"><b>${a.name}</b><span class="st st-${on?status:'idle'}">${on?status:'off'}</span></button>`+
+      (open?`<div class="acard"><p>${a.does}</p><span class="lbl">NOW</span><p>${now}</p>
+        <span class="lbl">TOOLS</span><div class="tools">${a.tools.map(t=>`<span>${t}</span>`).join('')}</div>
+        <span class="lbl">A PERSON DECIDES</span><p>${a.decides}</p>
+        <span class="lbl">RECENT</span><ul style="margin:0;padding-left:18px">${a.last.map(l=>`<li>${l}</li>`).join('')}</ul></div>`:''); }).join('')}</div>
+    <div class="rsec"><h3>Waiting for you</h3>${det.waiting.length?det.waiting.map((w,i)=>{ const d=RV.done[k+i];
+      return `<div class="wait ${d?'done':''}"><div>${w.t}<small>${d?'Approved by you · logged in Records':'Needs: '+w.who}</small></div>${d?'<span class="st st-working">done</span>':`<button class="mini" data-ok="${i}">Approve</button>`}</div>`; }).join(''):'<p class="note" style="margin:0">Nothing here needs a person right now.</p>'}</div>
+    <div class="rsec"><h3>Work feed</h3><div class="feed" id="r-feed">${RV.feed.map(l=>`<div>${l}</div>`).join('')}</div></div>
+    <div class="rsec never"><h3>Never</h3><ul>${det.never.map(n=>`<li>${n}</li>`).join('')}</ul></div>
+    <div class="rsec"><h3>Hands to</h3><div class="hands">${det.hands.map(h=>`<button data-go="${h}">${roomName(h)} →</button>`).join('')}</div></div>`;
+  $('#r-back').onclick=closeRoom;
+  document.querySelectorAll('[data-agent]').forEach(b=>b.onclick=()=>{ RV.agent=+b.dataset.agent; renderRoomPanel(); });
+  document.querySelectorAll('[data-ok]').forEach(b=>b.onclick=()=>{ RV.done[k+b.dataset.ok]=true; RV.feed.unshift(`${hhmm()} Approved by you: ${det.waiting[+b.dataset.ok].t}`); renderRoomPanel(); });
+  document.querySelectorAll('[data-go]').forEach(b=>b.onclick=()=>openRoom(b.dataset.go));
+  const ro=$('#r-on'); if(ro) ro.onclick=()=>{ S.rooms[k]=true; openRoom(k); };
+  if(st){
+    $('#s-prev').onclick=()=>goStory(RV.story-1);
+    $('#s-next').onclick=()=>{ if(RV.story===STORY.length-1){ stopStory(); renderRoomPanel(); caption('<b>Best case complete.</b> Every step is in Records'); } else goStory(RV.story+1); };
+    $('#s-play').onclick=()=>{ RV.playing=!RV.playing; armStory(); renderRoomPanel(); };
+    $('#s-end').onclick=closeRoom;
+    const tw=$('#s-twist'); if(tw) tw.onclick=()=>{ RV.twist=true; RV.playing=false; armStory(); renderRoomPanel(); };
+    const ut=$('#s-untwist'); if(ut) ut.onclick=()=>{ RV.twist=false; renderRoomPanel(); };
+  }
+}
+function goStory(i){
+  RV.story=Math.max(0,Math.min(STORY.length-1,i));
+  openRoom(STORY[RV.story].room, true);
+  caption(`<b>Step ${RV.story+1} of ${STORY.length}:</b> ${STORY[RV.story].title}`);
+  armStory();
+}
+function armStory(){ clearTimeout(storyTimer); if(RV.playing && RV.story>=0 && RV.story<STORY.length-1) storyTimer=setTimeout(()=>goStory(RV.story+1),5500); }
+function startStory(at){ if(!S.type) applyType('eng'); RV.playing=true; goStory(at||0); }
+function stopStory(){ clearTimeout(storyTimer); RV.story=-1; RV.playing=false; RV.twist=false; }
+$('#follow').onclick=()=>startStory(0);
+document.addEventListener('keydown',e=>{ if(e.key==='Escape' && view==='room') closeRoom(); });
+
 $('#m-office').onclick=()=>setMode('office');
 $('#m-user').onclick=()=>setMode('user');
 $('#next').onclick=()=>{ const st=steps(); if(step<st.length-1){ step++; render(); if(mode==='office'&&step===5) caption('<b>Your office is open.</b> Agents start work.'); } else { caption(mode==='office'?'This is where office3d.html would open':'All set · your devices answer to your voice'); } };
 $('#back').onclick=()=>{ step--; render(); };
 
-// #brokerage, #pm, #eng or #clinic in the address opens with that office type picked (for demos)
-const pick=location.hash.slice(1); if(PRESETS[pick]) applyType(pick);
+// Direct links for demos: #eng picks the office type; #eng/room=site opens a room; #eng/story=5 opens the story at step 5
+const [pick,extra='']=location.hash.slice(1).split('/'); if(PRESETS[pick]) applyType(pick);
 resize(); render(); requestAnimationFrame(frame);
+if(S.type) caption('Click any room to go inside · ▶ Follow a fix plays the best case');
+const [ek,ev]=extra.split('=');
+if(ek==='room' && RD[ev]) openRoom(ev);
+if(ek==='story'){ startStory((+ev||1)-1); RV.playing=false; armStory(); renderRoomPanel(); }
 })();
 </script>
 </body>

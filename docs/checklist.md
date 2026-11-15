@@ -47,6 +47,8 @@ Key: ⬜ to build · 🟢 done · ❓ open
 | Item | Status |
 |---|---|
 | Sign-up mockup: 5 areas, rooms per office type | 🟢 mockup (`docs/mockups/diwan-onboarding-3d-mockup.html`) |
+| Inside each room: agents at desks, agent cards, waiting-for-you, work feed, hands-to; “Follow a fix” best case | 🟢 mockup (same file; data in `docs/mockups/rooms-data.js`) |
+| Features of all 24 rooms and 45 agents | 🟢 spec: `docs/rooms-and-agents.md` (generated; not built) |
 | Site Witness screens mockup (walk, review, verify, owner, trust) | 🟢 mockup (`docs/mockups/diwan-site-witness-mockup.html`) |
 | Real pages built from the mockups | ⬜ |
 | Arabic RTL, light mode, accessibility | ⬜ |
