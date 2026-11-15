@@ -1,0 +1,211 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0a0d13">
+<title>Diwan Helper</title>
+<style>
+:root{
+  --bg:#0a0d13; --bg-2:#0f131c; --raise:#1a2030; --line:rgba(255,255,255,.08); --line-2:rgba(255,255,255,.14);
+  --ink:#ece8df; --muted:#8b92a3; --gold:#e8c77a; --gold-soft:rgba(232,199,122,.12);
+  --teal:#5ccfb5; --green:#82d99f; --warn:#f0b35e; --bad:#f27d7d;
+  --font:system-ui,-apple-system,"Segoe UI",sans-serif; --mono:ui-monospace,Menlo,monospace;
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 var(--font);-webkit-font-smoothing:antialiased}
+button,input{font:inherit;color:inherit}
+button{cursor:pointer}
+.wrap{max-width:560px;margin:0 auto;padding:16px 16px 40px}
+html,body{overflow-x:hidden}
+header{display:flex;align-items:center;gap:6px 10px;margin-bottom:14px;flex-wrap:wrap}
+header b{font-family:Georgia,serif;font-weight:400;font-size:24px}
+header span{font-size:12px;color:var(--muted)}
+.dot{margin-left:auto;font-size:12px;color:var(--muted);display:flex;align-items:center;gap:6px}
+.dot i{width:8px;height:8px;border-radius:50%;background:var(--bad)}
+.dot.on i{background:var(--green)}
+.sample{font:500 10.5px var(--mono);letter-spacing:.06em;text-transform:uppercase;color:var(--warn);background:rgba(240,179,94,.13);padding:2px 8px;border-radius:99px}
+.card{background:var(--bg-2);border:1px solid var(--line);border-radius:14px;padding:14px;margin-bottom:12px}
+.k{font:600 11px var(--font);letter-spacing:1.6px;text-transform:uppercase;color:var(--gold);margin:0 0 8px}
+.people{display:flex;gap:6px;flex-wrap:wrap}
+.people button{border:1px solid var(--line-2);background:transparent;border-radius:99px;padding:6px 12px;font-size:13.5px}
+.people button[aria-pressed="true"]{background:var(--gold);border-color:var(--gold);color:#1b1608;font-weight:600}
+.ask{display:flex;gap:8px}
+.ask input{flex:1;min-width:0;background:var(--bg);border:1px solid var(--line-2);border-radius:12px;padding:12px;outline:none;font-size:16px}
+.ask input:focus{border-color:var(--gold)}
+.btn{border:1px solid var(--line-2);background:var(--raise);border-radius:12px;padding:10px 14px;font-weight:600}
+.btn.primary{background:var(--gold);border-color:var(--gold);color:#1b1608}
+.btn:disabled{opacity:.4;cursor:not-allowed}
+.mic[aria-pressed="true"]{background:var(--bad);border-color:var(--bad);color:#fff}
+.hint{font-size:12.5px;color:var(--muted);margin:8px 0 0}
+.chips{display:flex;gap:6px;flex-wrap:wrap;margin-top:10px}
+.chips button{border:1px dashed var(--line-2);background:transparent;border-radius:99px;padding:5px 10px;font-size:12.5px;color:var(--muted)}
+.chips button:hover{color:var(--ink);border-color:var(--gold)}
+.steps{display:grid;gap:6px;font-size:14px}
+.steps div{display:flex;gap:8px;align-items:flex-start}
+.steps b{width:18px;flex:none;text-align:center}
+.ok{color:var(--green)} .no{color:var(--bad)} .wait{color:var(--warn)}
+.options{display:grid;gap:6px;margin-top:10px}
+.options button{text-align:left}
+.approve{margin-top:10px;padding:12px;border-radius:12px;border:1px solid rgba(240,179,94,.45);background:rgba(240,179,94,.1)}
+.proof img{width:100%;border-radius:10px;border:1px solid var(--line-2);margin-top:10px;display:block}
+.log{font:12px/1.6 var(--mono);color:var(--muted);max-height:220px;overflow:auto}
+.log div{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pair input{letter-spacing:.4em;text-align:center;font:600 24px var(--mono)}
+.err{color:var(--bad);font-size:13px;min-height:18px;margin-top:6px}
+[hidden]{display:none!important}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header><b>Diwan</b><span>Helper demo</span><span class="sample">sample data</span>
+    <div class="dot" id="hdot" title="Is the helper on the Mac connected?"><i></i><span>Mac helper</span></div></header>
+
+  <section class="card pair" id="pair" hidden>
+    <p class="k">Join this Mac</p>
+    <p class="hint" style="margin:0 0 10px">Type the 6-digit pairing code shown in the terminal on the Mac.</p>
+    <div class="ask"><input id="code" inputmode="numeric" maxlength="6" autocomplete="one-time-code" aria-label="Pairing code"><button class="btn primary" id="join">Join</button></div>
+    <div class="err" id="perr"></div>
+  </section>
+
+  <div id="main" hidden>
+    <section class="card">
+      <p class="k">Who is speaking</p>
+      <div class="people" id="people"></div>
+      <p class="hint">Voice match isn’t built yet, so you pick the person. Each person may open different files.</p>
+    </section>
+
+    <section class="card">
+      <p class="k">Say or type a command</p>
+      <form class="ask" id="form">
+        <input id="said" placeholder="open the Al Noor slides" autocomplete="off" aria-label="Command">
+        <button class="btn mic" type="button" id="mic" aria-pressed="false" title="Speak">🎙</button>
+        <button class="btn primary" type="submit">Go</button>
+      </form>
+      <p class="hint" id="michint"></p>
+      <div class="chips" id="chips"></div>
+    </section>
+
+    <section class="card" id="result" hidden>
+      <p class="k">What happened</p>
+      <div class="steps" id="steps"></div>
+      <div class="options" id="options"></div>
+      <div class="approve" id="approve" hidden><div id="aq"></div><button class="btn primary" id="aok" style="margin-top:8px;width:100%">Approve</button></div>
+      <div class="proof" id="proof"></div>
+    </section>
+
+    <section class="card">
+      <p class="k">Event log</p>
+      <div class="log" id="log"></div>
+    </section>
+  </div>
+</div>
+
+<script>
+(function(){
+const $=s=>document.querySelector(s);
+const store={ get(k){ try{return localStorage.getItem(k);}catch(e){return null;} }, set(k,v){ try{localStorage.setItem(k,v);}catch(e){} } };
+let session=store.get('sw-session')||'', person=store.get('sw-person')||'layla', people=[], lastSaid='';
+const EXAMPLES=['open the Al Noor slides','open the report','send the Al Noor report to Karim','open the clinic report','افتح عرض النور'];
+
+async function api(path,opts={}){
+  const r=await fetch(path,{...opts,headers:{'Content-Type':'application/json','X-Session':session,...(opts.headers||{})}});
+  const body=await r.json().catch(()=>({}));
+  if(!r.ok) throw Object.assign(new Error(body.detail||r.statusText),{status:r.status});
+  return body;
+}
+function key(){ return Date.now().toString(36)+Math.random().toString(36).slice(2,10); }
+function esc(s){ return String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+
+async function start(){
+  const info=await api('/api/info');
+  people=info.people;
+  $('#hdot').classList.toggle('on',info.helper); $('#hdot span').textContent=info.helper?'Mac helper connected':'Mac helper not connected';
+  if(!info.paired){ $('#pair').hidden=false; $('#main').hidden=true; $('#code').focus(); return; }
+  $('#pair').hidden=true; $('#main').hidden=false;
+  drawPeople(); drawChips(); setupMic(); refresh(); setInterval(refresh,3000);
+}
+$('#join').onclick=async()=>{
+  $('#perr').textContent='';
+  try{ const r=await api('/api/pair',{method:'POST',body:JSON.stringify({code:$('#code').value})}); session=r.session; store.set('sw-session',session); start(); }
+  catch(e){ $('#perr').textContent=e.message; }
+};
+$('#code').addEventListener('keydown',e=>{ if(e.key==='Enter') $('#join').click(); });
+
+function drawPeople(){
+  $('#people').innerHTML=people.map(p=>`<button data-p="${p.id}" aria-pressed="${p.id===person}">${esc(p.name)} · ${esc(p.role)}</button>`).join('');
+  document.querySelectorAll('[data-p]').forEach(b=>b.onclick=()=>{ person=b.dataset.p; store.set('sw-person',person); drawPeople(); });
+}
+function drawChips(){
+  $('#chips').innerHTML=EXAMPLES.map(t=>`<button type="button">${esc(t)}</button>`).join('');
+  $('#chips').querySelectorAll('button').forEach((b,i)=>b.onclick=()=>{ $('#said').value=EXAMPLES[i]; go(EXAMPLES[i]); });
+}
+function setupMic(){
+  const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
+  if(!SR || !window.isSecureContext){
+    $('#mic').disabled=true;
+    $('#michint').textContent='On the phone, tap the mic on your keyboard to dictate. (The page’s own mic only works on the Mac at localhost: browsers block it on plain http over Wi-Fi.)';
+    return;
+  }
+  $('#michint').textContent='Tap 🎙 and speak in English or Arabic.';
+  let rec=null;
+  $('#mic').onclick=()=>{
+    if(rec){ rec.stop(); return; }
+    rec=new SR(); rec.lang=/[؀-ۿ]/.test($('#said').value)?'ar-AE':'en-US'; rec.interimResults=true;
+    $('#mic').setAttribute('aria-pressed','true');
+    rec.onresult=e=>{ const r=e.results[e.results.length-1]; $('#said').value=r[0].transcript; if(r.isFinal) go(r[0].transcript); };
+    rec.onend=()=>{ rec=null; $('#mic').setAttribute('aria-pressed','false'); };
+    rec.onerror=e=>{ $('#michint').textContent='Mic: '+e.error; };
+    rec.start();
+  };
+}
+$('#form').onsubmit=e=>{ e.preventDefault(); const t=$('#said').value.trim(); if(t) go(t); };
+
+function drawSteps(steps){
+  $('#steps').innerHTML=steps.map(s=>`<div><b class="${s.ok===true?'ok':s.ok===false?'no':'wait'}">${s.ok===true?'✓':s.ok===false?'✕':'…'}</b><span>${esc(s.t)}</span></div>`).join('');
+}
+async function go(text, choose){
+  lastSaid=text;
+  $('#result').hidden=false; $('#options').innerHTML=''; $('#approve').hidden=true; $('#proof').innerHTML='';
+  drawSteps([{t:`Heard “${text}”`,ok:null}]);
+  let r;
+  try{ r=await api('/api/command',{method:'POST',body:JSON.stringify({text,person,key:key(),choose})}); }
+  catch(e){ if(e.status===401){ session=''; start(); } drawSteps([{t:e.message,ok:false}]); return; }
+  drawSteps(r.steps);
+  if(r.status==='choose'){
+    $('#options').innerHTML=r.options.map(o=>`<button class="btn" data-o="${o.id}">${esc(o.title)}</button>`).join('');
+    $('#options').querySelectorAll('[data-o]').forEach(b=>b.onclick=()=>go(lastSaid,b.dataset.o));
+  }
+  if(r.status==='needs_approval'){
+    $('#approve').hidden=false; $('#aq').textContent=r.question; $('#aok').disabled=false;
+    $('#aok').onclick=async()=>{ $('#aok').disabled=true; const a=await api('/api/approve/'+r.approval,{method:'POST'}); drawSteps(r.steps.slice(0,-1).concat([{t:'Approved by you',ok:true},{t:a.note,ok:true}])); $('#approve').hidden=true; refresh(); };
+  }
+  if(r.status==='sent') follow(r.command, r.steps);
+  refresh();
+}
+async function follow(cid, steps){
+  const until=Date.now()+20000;
+  while(Date.now()<until){
+    await new Promise(res=>setTimeout(res,700));
+    const s=await api('/api/status/'+cid).catch(()=>null);
+    if(!s || s.state==='sent') continue;
+    const last={confirmed:{t:s.detail,ok:true},unconfirmed:{t:s.detail,ok:null},failed:{t:s.detail,ok:false}}[s.state];
+    drawSteps(steps.concat([last]));
+    if(s.proof) $('#proof').innerHTML=`<img alt="Screenshot of the Mac as proof" src="/api/proof/${cid}?s=${encodeURIComponent(session)}&t=${Date.now()}"><p class="hint">Proof: the Mac’s screen right after opening.</p>`;
+    refresh(); return;
+  }
+  drawSteps(steps.concat([{t:'No answer from the Mac within 20 seconds',ok:false}]));
+}
+async function refresh(){
+  try{
+    const info=await api('/api/info'); $('#hdot').classList.toggle('on',info.helper); $('#hdot span').textContent=info.helper?'Mac helper connected':'Mac helper not connected';
+    const ev=await api('/api/events');
+    $('#log').innerHTML=ev.map(e=>`<div>${esc(e.at.slice(11,19))} ${esc(e.type)} · ${esc(e.actor)} ${esc(Object.values(e.content).filter(v=>typeof v==='string').join(' · '))}</div>`).join('');
+  }catch(e){}
+}
+start().catch(e=>{ document.body.insertAdjacentHTML('beforeend',`<p class="wrap err">Can’t reach the hub: ${esc(e.message)}</p>`); });
+})();
+</script>
+</body>
+</html>

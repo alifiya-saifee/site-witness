@@ -5,3 +5,7 @@ __pycache__/
 .venv/
 *.db
 .DS_Store
+run/
+samples/records/*.pdf
+.pytest_cache/
+run-demo.log

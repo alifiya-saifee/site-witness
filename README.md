@@ -12,3 +12,24 @@ entry.
 - Mockups (open in a browser): [docs/mockups/](docs/mockups/)
 
 All names, buildings and figures in the mockups are made up.
+
+## Run the helper demo (phone → Mac)
+
+Say or type “open the Al Noor slides” on your phone; the file opens on the Mac and a screenshot comes back as proof.
+
+```
+./run-demo
+```
+
+The terminal shows a link for your phone (same Wi-Fi) and a 6-digit pairing code. Stop with Ctrl+C.
+
+- On the phone, use your **keyboard’s mic** to dictate: browsers block a page’s own mic on plain `http://` over
+  Wi-Fi. On the Mac (`http://localhost:8040`) the page’s 🎙 button works.
+- You pick who is speaking (voice match isn’t built yet). Visitors are refused; “open the report” asks which one;
+  “send … to …” waits for your tap and, in this demo, only logs “would send”. Nothing is emailed.
+- macOS asks once for **Screen Recording** (the proof screenshot) and once to let Terminal **control Preview**
+  (the “is it really open?” check). If you say no, the page shows “couldn’t confirm” instead of pretending.
+- The helper only opens files listed in `sitewitness/records.py`, each download needs a one-time token, and it never
+  runs any other command.
+
+Tests: `.venv/bin/pytest -q`

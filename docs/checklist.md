@@ -9,8 +9,8 @@ Key: ⬜ to build · 🟢 done · ❓ open
 
 | Item | Status | Diwan has (read only) |
 |---|---|---|
-| Append-only event log; unknown types rejected | ⬜ | `diwan/events.py` (`TYPES`) |
-| Repeated key returns the stored event (no duplicates) | ⬜ | `events.key` unique |
+| Append-only event log; unknown types rejected | 🟢 `sitewitness/events.py` (the database also refuses update/delete) | `diwan/events.py` (`TYPES`) |
+| Repeated key returns the stored event (no duplicates) | 🟢 same file; a double tap never opens twice | `events.key` unique |
 | Facts that are superseded, never edited | ⬜ | `fact.superseded` in `graph.py` |
 | Approval pinned to facts; cancelled when a pinned fact changes; Compliance alerted first | ⬜ | `rests_on` + `g.stale()`, but Diwan only *shows* stale; it doesn't cancel |
 | Only dependent tasks reopen | ⬜ | `g.impact()` |
@@ -38,6 +38,8 @@ Key: ⬜ to build · 🟢 done · ❓ open
 |---|---|
 | Resident voice request → task; closes only when camera sees it working | ⬜ |
 | Voice match for staff; a tap for sensitive actions | ⬜ |
+| Helper demo: command from phone (paired) → file opens on the Mac → checked → screenshot proof; permissions, “which one?”, send needs a tap | 🟢 `./run-demo` (`sitewitness/`, `helper/`, `web/control.html`) |
+| Voice match (today you pick the person) | ⬜ |
 | Home Assistant room hub client; commands logged and confirmed | ⬜ |
 | Hub hardware: Pi/mini PC, IR blaster, CEC, Wi-Fi plug | ⬜ |
 | Guiding mode for devices with no interface | ⬜ |
