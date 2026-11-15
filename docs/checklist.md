@@ -1,0 +1,77 @@
+# Site Witness: build checklist
+
+Fresh repo, started 15 Nov 2026. **Nothing is built yet.** Diwan already has some of these ideas; the "Diwan has"
+column says where to *read* them. Don't copy code (Championship rule: fresh code only).
+
+Key: ⬜ to build · 🟢 done · ❓ open
+
+## 1. Engine (rebuild fresh)
+
+| Item | Status | Diwan has (read only) |
+|---|---|---|
+| Append-only event log; unknown types rejected | ⬜ | `diwan/events.py` (`TYPES`) |
+| Repeated key returns the stored event (no duplicates) | ⬜ | `events.key` unique |
+| Facts that are superseded, never edited | ⬜ | `fact.superseded` in `graph.py` |
+| Approval pinned to facts; cancelled when a pinned fact changes; Compliance alerted first | ⬜ | `rests_on` + `g.stale()`, but Diwan only *shows* stale; it doesn't cancel |
+| Only dependent tasks reopen | ⬜ | `g.impact()` |
+| Engineer e-signature | ⬜ | `diwan/signing.py` pattern |
+
+## 2. Site Witness agent
+
+| Item | Status |
+|---|---|
+| Rulebooks: `law3_art7d.json`, `dha_clinic.json`, versioned clauses | ⬜ |
+| Building, Walk, Verdict, FixTask | ⬜ |
+| Agent: 3 verdicts only (`issue_found`, `needs_human`, `no_issue_seen`), never "pass", each with proof frames | ⬜ |
+| Frames taken from the walk video in the browser (small JPEGs) | ⬜ |
+| Engineer review: accept / edit / overturn; report locked until every finding signed | ⬜ |
+| Fix verified on camera, matched to the original frame | ⬜ |
+| Contractor payment pinned to {fix verified, bank account, amount}; bank change stops it | ⬜ |
+| Model gate: a person approves a new model; each report records its model version | ⬜ |
+| Export: signed report + evidence pack (upload-ready) | ⬜ |
+| Offline walk: record, queue, sync with keys | ⬜ |
+| Blur faces and number plates before saving | ⬜ |
+
+## 3. End-user side
+
+| Item | Status |
+|---|---|
+| Resident voice request → task; closes only when camera sees it working | ⬜ |
+| Voice match for staff; a tap for sensitive actions | ⬜ |
+| Home Assistant room hub client; commands logged and confirmed | ⬜ |
+| Hub hardware: Pi/mini PC, IR blaster, CEC, Wi-Fi plug | ⬜ |
+| Guiding mode for devices with no interface | ⬜ |
+
+## 4. Front end
+
+| Item | Status |
+|---|---|
+| Sign-up mockup: 5 areas, rooms per office type | 🟢 mockup (`docs/mockups/diwan-onboarding-3d-mockup.html`) |
+| Site Witness screens mockup (walk, review, verify, owner, trust) | 🟢 mockup (`docs/mockups/diwan-site-witness-mockup.html`) |
+| Real pages built from the mockups | ⬜ |
+| Arabic RTL, light mode, accessibility | ⬜ |
+
+## 5. Tests
+
+| Item | Status |
+|---|---|
+| pytest per rule: never "pass", fix-gated payment, bank change stops payment, model gate, no duplicate sync | ⬜ |
+| End-to-end: walk → verdicts → sign → fix verified → payment unlocked | ⬜ |
+
+## 6. Championship (portal 4 Dec; due 4 Jan 2027; we submit 2 Jan)
+
+| Item | Status |
+|---|---|
+| Browser prototype judges can test, no install, live until May 2027 | ⬜ |
+| 2-min demo video (webcam face in a corner) | ⬜ |
+| 6-min pitch video (face visible, unlisted link) | ⬜ |
+| Pitch deck: 12 slides + cover + close | ⬜ |
+| Business Canvas (12 sections) + Agent Card (13 prompts) | ⬜ |
+| Room hub demo (4 devices) | ⬜ |
+| 5–10 interviews (engineering offices, property managers) | ⬜ |
+| Real test numbers: test count, success rate, one failure + fix, cost per task | ⬜ |
+
+## Open questions
+- ❓ Stack: same as Diwan (Python + FastAPI, vanilla JS) or something else?
+- ❓ Pilot offices and price per report; does DM accept video-frame evidence?
+- ❓ `site-witness-mockup.html`, the "solution and feature plan" and the "visual redesign plan" aren't here yet.

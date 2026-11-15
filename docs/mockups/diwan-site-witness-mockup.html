@@ -1,0 +1,840 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Diwan with Site Witness</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=IBM+Plex+Sans+Arabic:wght@400;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#f5f4f0; --panel:#ffffff; --panel-2:#faf9f6; --line:#e4e1d9; --ink:#1c1b18; --ink-2:#5f5c55; --ink-3:#8b877e;
+  --accent:#0f6b5c; --accent-soft:#e3f1ee;
+  --fail:#b42318; --fail-soft:#fdecea;
+  --human:#b54708; --human-soft:#fdf1e3;
+  --ok:#3f6212; --ok-soft:#eef5e2;
+  --route:#475467; --route-soft:#eef0f3;
+  --mono:"JetBrains Mono", ui-monospace, Menlo, monospace;
+  --sans:"Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --ar:"IBM Plex Sans Arabic", "Geeza Pro", sans-serif;
+  --shadow:0 1px 2px rgba(0,0,0,.04), 0 4px 16px rgba(0,0,0,.04);
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --bg:#121311; --panel:#1b1c1a; --panel-2:#20221f; --line:#2f312d; --ink:#ecebe6; --ink-2:#aaa79f; --ink-3:#7c7a73;
+    --accent:#4fbfa8; --accent-soft:#1d3531;
+    --fail:#f97066; --fail-soft:#3a1d1b;
+    --human:#fdb022; --human-soft:#3a2a14;
+    --ok:#a6d96a; --ok-soft:#24301a;
+    --route:#98a2b3; --route-soft:#262a30;
+    --shadow:none;
+  }
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.5 var(--sans)}
+button{font:inherit;color:inherit;cursor:pointer}
+.wrap{max-width:1200px;margin:0 auto;padding:0 16px}
+[hidden]{display:none!important}
+
+/* top bar */
+.top{background:var(--panel);border-bottom:1px solid var(--line);position:sticky;top:0;z-index:5}
+.top .bar1{display:flex;align-items:center;gap:12px;min-height:56px;flex-wrap:wrap}
+button.brand{border:0;background:transparent;padding:6px 8px;margin-left:-8px;border-radius:8px;display:flex;align-items:baseline;gap:8px;font-size:15px}
+button.brand:hover{background:var(--panel-2)}
+.dmark{font-weight:800;letter-spacing:.02em}
+.crumb{color:var(--ink-3);font-weight:500}
+.sw{color:var(--accent);font-weight:700}
+.sample{font:500 11px var(--mono);text-transform:uppercase;letter-spacing:.08em;color:var(--human);background:var(--human-soft);padding:3px 8px;border-radius:99px}
+.rooms{display:flex;gap:2px;margin-left:auto;flex-wrap:wrap}
+.rooms button{border:0;background:transparent;padding:7px 10px;border-radius:8px;color:var(--ink-2);font-weight:500;font-size:13.5px;display:inline-flex;gap:6px;align-items:center}
+.rooms button:hover{background:var(--panel-2);color:var(--ink)}
+.rooms button[aria-current="page"]{background:var(--ink);color:var(--panel)}
+.newtag{font:600 10px var(--mono);text-transform:uppercase;background:var(--accent);color:#fff;padding:1px 5px;border-radius:4px}
+.badge{font:600 10.5px var(--mono);background:var(--fail);color:#fff;border-radius:99px;padding:0 6px;min-width:18px;text-align:center}
+.badge:empty{display:none}
+.subbar{border-top:1px solid var(--line)}
+.subbar .wrap{display:flex;gap:12px;align-items:center;min-height:48px;flex-wrap:wrap}
+.tabs{display:flex;gap:4px;margin-left:auto;flex-wrap:wrap}
+.tab{border:0;background:transparent;padding:8px 12px;border-radius:8px;color:var(--ink-2);font-weight:500}
+.tab:hover{background:var(--panel-2);color:var(--ink)}
+.tab[aria-selected="true"]{background:var(--accent-soft);color:var(--accent)}
+.rulebook{display:flex;border:1px solid var(--line);border-radius:8px;overflow:hidden}
+.rulebook button{border:0;background:transparent;padding:6px 10px;font-size:12.5px;color:var(--ink-2)}
+.rulebook button[aria-pressed="true"]{background:var(--ink);color:var(--panel)}
+
+.room{display:none}.room.on{display:block}
+.rhead{padding:22px 0 14px}.rhead h1{margin:0;font-size:22px;letter-spacing:-.01em}.rhead p{margin:4px 0 0}
+
+/* building header */
+.bhead{padding:20px 0 8px;display:flex;gap:24px;flex-wrap:wrap;align-items:flex-end;justify-content:space-between}
+.bhead h1{margin:0;font-size:22px;letter-spacing:-.01em}
+.bhead .meta{color:var(--ink-2);font-size:13px;margin-top:4px}
+.kpis{display:flex;gap:12px;flex-wrap:wrap}
+.kpi{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:10px 14px;min-width:132px}
+.kpi b{display:block;font-size:18px}
+.kpi span{color:var(--ink-3);font-size:12px}
+
+section.view{display:none;padding:12px 0 48px}
+section.view.on{display:block}
+.grid{display:grid;gap:16px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;box-shadow:var(--shadow)}
+.card h2{font-size:15px;margin:0}
+.card .hd{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 16px;border-bottom:1px solid var(--line);flex-wrap:wrap}
+.card .bd{padding:16px}
+.muted{color:var(--ink-2)}
+.small{font-size:12.5px}
+.mono{font-family:var(--mono)}
+
+/* chips */
+.chip{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:600;padding:3px 9px;border-radius:99px;white-space:nowrap}
+.chip::before{content:"";width:7px;height:7px;border-radius:50%;background:currentColor}
+.c-fail{color:var(--fail);background:var(--fail-soft)}
+.c-human{color:var(--human);background:var(--human-soft)}
+.c-ok{color:var(--ok);background:var(--ok-soft)}
+.c-route{color:var(--route);background:var(--route-soft)}
+.c-signed{color:var(--accent);background:var(--accent-soft)}
+
+/* home */
+.homegrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:14px;padding-bottom:40px}
+.rcard{text-align:left;border:1px solid var(--line);background:var(--panel);border-radius:12px;padding:16px;display:grid;gap:8px;box-shadow:var(--shadow)}
+.rcard:hover{border-color:var(--accent)}
+.rcard h3{margin:0;font-size:15px;display:flex;justify-content:space-between;align-items:center;gap:8px}
+.rcard .line{font-size:13px;color:var(--ink-2)}
+.rcard.newroom{border:2px solid var(--accent)}
+
+/* tables */
+.tbl{width:100%;border-collapse:collapse;font-size:13px}
+.tbl th,.tbl td{text-align:left;padding:9px 6px;border-bottom:1px solid var(--line);vertical-align:middle}
+.tbl th{font-size:12px;color:var(--ink-3);font-weight:600}
+.tbl td.num,.tbl th.num{text-align:right;font-family:var(--mono)}
+.link{border:0;background:none;color:var(--accent);font-weight:600;padding:0;text-decoration:underline;text-underline-offset:3px}
+
+/* finance */
+.fin{grid-template-columns:minmax(0,1.4fr) minmax(0,1fr);padding-bottom:40px}
+@media (max-width:900px){.fin{grid-template-columns:1fr}}
+.amt{display:flex;gap:10px;align-items:baseline;margin:12px 0;flex-wrap:wrap}.amt b{font-size:22px}
+.pins{display:grid;gap:8px}
+.pin{display:flex;justify-content:space-between;gap:12px;align-items:center;padding:9px 12px;border:1px solid var(--line);border-radius:10px;font-size:13px}
+.demo{margin-top:14px;padding-top:12px;border-top:1px dashed var(--line);display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.citem{display:grid;grid-template-columns:auto 1fr auto;gap:12px;align-items:center;padding:12px;border:1px solid var(--line);border-radius:10px}
+.citem .sub{font-size:12.5px;color:var(--ink-3)}
+@media (max-width:640px){.citem{grid-template-columns:1fr}}
+.two{grid-template-columns:1fr 1fr;padding-bottom:40px}
+@media (max-width:760px){.two{grid-template-columns:1fr}}
+.brief{font-size:15px;line-height:1.75}
+.brief.ar{font-family:var(--ar)}
+
+/* walk view */
+.walk{grid-template-columns:minmax(0,360px) minmax(0,1fr)}
+@media (max-width:880px){.walk{grid-template-columns:1fr}}
+.phone{margin:0 auto;width:100%;max-width:340px;border-radius:36px;border:10px solid #1c1b18;background:#0d0d0c;color:#f2f1ec;overflow:hidden;box-shadow:0 20px 50px rgba(0,0,0,.18)}
+.phone .status{display:flex;justify-content:space-between;padding:8px 16px;font:500 11px var(--mono);color:#cfcdc6}
+.offline{color:#fdb022}
+.cam{position:relative;aspect-ratio:3/4;background:#20221f}
+.cam svg{width:100%;height:100%;display:block}
+.rec{position:absolute;top:10px;left:10px;display:flex;gap:6px;align-items:center;background:rgba(0,0,0,.55);padding:4px 8px;border-radius:99px;font:500 11px var(--mono)}
+.rec i{width:8px;height:8px;border-radius:50%;background:#f04438;animation:blink 1.2s infinite}
+@keyframes blink{50%{opacity:.25}}
+.detect{position:absolute;border:2px solid #fdb022;border-radius:6px}
+.detect span{position:absolute;top:-22px;left:-2px;background:#fdb022;color:#1c1b18;font:600 10.5px var(--sans);padding:2px 6px;border-radius:4px;white-space:nowrap}
+.narr{padding:12px 14px;font-size:12.5px;border-top:1px solid #2a2b28}
+.narr .ar{font-family:var(--ar);direction:rtl;text-align:right;color:#d8d6cf;margin-top:4px}
+.phone .ctrls{display:flex;justify-content:space-around;align-items:center;padding:12px 0 16px}
+.phone .shutter{width:56px;height:56px;border-radius:50%;border:4px solid #f2f1ec;background:#f04438}
+.phone .ctrls small{color:#a9a69e;font-size:11px}
+.cover{display:grid;gap:8px}
+.cover-row{display:grid;grid-template-columns:150px 1fr 48px;gap:10px;align-items:center;font-size:13px}
+.bar{height:8px;background:var(--panel-2);border:1px solid var(--line);border-radius:99px;overflow:hidden}
+.bar i{display:block;height:100%;background:var(--accent)}
+.queue{display:flex;gap:10px;align-items:center;padding:10px 12px;border:1px dashed var(--line);border-radius:10px;font-size:13px}
+
+/* review view */
+.review{grid-template-columns:minmax(0,1.25fr) minmax(0,1fr)}
+@media (max-width:980px){.review{grid-template-columns:1fr}}
+.area{border-top:1px solid var(--line)}
+.area:first-child{border-top:0}
+.area h3{font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--ink-3);margin:0;padding:12px 16px 6px}
+.finding{display:grid;grid-template-columns:1fr auto;gap:8px 12px;align-items:center;padding:10px 16px;border-left:3px solid transparent;cursor:pointer}
+.finding:hover{background:var(--panel-2)}
+.finding.sel{background:var(--panel-2);border-left-color:var(--accent)}
+.finding .t{font-weight:500}
+.finding .s{grid-column:1/-1;display:flex;gap:10px;align-items:center;flex-wrap:wrap;color:var(--ink-3);font-size:12px}
+.lock{display:flex;align-items:center;gap:10px}
+.lock .bar{width:140px}
+.proof svg{width:100%;height:auto;display:block;border-radius:10px;border:1px solid var(--line);background:#2a2b28}
+.proof .cap{display:flex;justify-content:space-between;gap:12px;margin:10px 0 2px;flex-wrap:wrap}
+.quote{background:var(--panel-2);border:1px solid var(--line);border-radius:10px;padding:10px 12px;font-size:13px;margin-top:12px}
+.actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px}
+.btn{border:1px solid var(--line);background:var(--panel);padding:8px 14px;border-radius:8px;font-weight:600;font-size:13px}
+.btn:hover{border-color:var(--ink-3)}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+.btn.danger{color:var(--fail)}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+.trail{margin-top:14px;font-size:12px;color:var(--ink-3);display:grid;gap:4px}
+.sigbox{margin-top:16px;padding:12px;border-radius:10px;border:1px solid var(--line);display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap}
+
+/* verify */
+.verify{grid-template-columns:repeat(2,minmax(0,1fr))}
+@media (max-width:760px){.verify{grid-template-columns:1fr}}
+.frame-cap{display:flex;justify-content:space-between;margin:10px 0 0;font-size:12.5px;color:var(--ink-2)}
+.state{display:flex;gap:12px;align-items:center;flex-wrap:wrap;padding:14px 16px;border-top:1px solid var(--line)}
+
+/* owner */
+.owner{grid-template-columns:minmax(0,1.3fr) minmax(0,1fr)}
+@media (max-width:900px){.owner{grid-template-columns:1fr}}
+.steps{display:grid;gap:0}
+.step{display:grid;grid-template-columns:28px 1fr auto;gap:12px;align-items:start;padding:10px 0;position:relative}
+.step:not(:last-child)::after{content:"";position:absolute;left:13px;top:36px;bottom:-4px;width:2px;background:var(--line)}
+[dir="rtl"] .step:not(:last-child)::after{left:auto;right:13px}
+.dot{width:28px;height:28px;border-radius:50%;display:grid;place-items:center;font:600 12px var(--mono);border:2px solid var(--line);background:var(--panel);z-index:1}
+.step.done .dot{background:var(--accent);border-color:var(--accent);color:#fff}
+.step.now .dot{border-color:var(--accent);color:var(--accent)}
+.step .who{font-size:12px;color:var(--ink-3)}
+.risk{display:grid;gap:10px}
+.risk div{display:flex;justify-content:space-between;gap:12px;padding:10px 12px;border:1px solid var(--line);border-radius:10px}
+.lang{display:flex;border:1px solid var(--line);border-radius:8px;overflow:hidden}
+.lang button{border:0;background:transparent;padding:5px 10px;font-size:12.5px}
+.lang button[aria-pressed="true"]{background:var(--accent-soft);color:var(--accent)}
+[dir="rtl"] .rt{font-family:var(--ar)}
+
+/* trust */
+.trust{grid-template-columns:repeat(2,minmax(0,1fr))}
+@media (max-width:880px){.trust{grid-template-columns:1fr}}
+.meter{height:8px;border-radius:99px;background:var(--panel-2);border:1px solid var(--line);overflow:hidden;min-width:80px}
+.meter i{display:block;height:100%}
+.gate{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+@media (max-width:520px){.gate{grid-template-columns:1fr}}
+.gate .m{border:1px solid var(--line);border-radius:10px;padding:12px}
+.gate .m.new{border-color:var(--accent)}
+.gate dl{display:grid;grid-template-columns:1fr auto;gap:4px 12px;margin:8px 0 0;font-size:13px}
+.gate dt{color:var(--ink-3)}
+.gate dd{margin:0;font-weight:600;text-align:right}
+.better{color:var(--ok)}
+.foot{color:var(--ink-3);font-size:12px;padding:8px 0 32px}
+.toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%) translateY(20px);opacity:0;background:var(--ink);color:var(--panel);padding:10px 16px;border-radius:10px;font-size:13px;transition:.25s;pointer-events:none;z-index:9;max-width:92vw}
+.toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+</style>
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap bar1">
+    <button class="brand" id="go-home" title="Diwan home"><span class="dmark">Diwan</span><span class="crumb">›</span><span class="sw" id="crumb">Home</span></button>
+    <span class="sample">Sample data · mockup</span>
+    <nav class="rooms" aria-label="Diwan rooms">
+      <button data-room="home" aria-current="page">Home</button>
+      <button data-room="deals">Deals</button>
+      <button data-room="finance">Finance <b class="badge" id="b-fin"></b></button>
+      <button data-room="compliance">Compliance <b class="badge" id="b-comp"></b></button>
+      <button data-room="ops">Operations</button>
+      <button data-room="desk">Front Desk</button>
+      <button data-room="records">Records</button>
+      <button data-room="site">Site Witness <span class="newtag">new</span></button>
+    </nav>
+  </div>
+  <div class="subbar" id="site-sub" hidden>
+    <div class="wrap">
+      <div class="rulebook" role="group" aria-label="Rulebook">
+        <button id="rb-law3" aria-pressed="true">Dubai Law 3 (buildings)</button>
+        <button id="rb-dha" aria-pressed="false">DHA clinic checklist</button>
+      </div>
+      <nav class="tabs" role="tablist">
+        <button class="tab" role="tab" data-v="walk" aria-selected="true">1 · Walk</button>
+        <button class="tab" role="tab" data-v="review" aria-selected="false">2 · Review &amp; sign</button>
+        <button class="tab" role="tab" data-v="verify" aria-selected="false">3 · Verify the fix</button>
+        <button class="tab" role="tab" data-v="owner" aria-selected="false">4 · Owner view</button>
+        <button class="tab" role="tab" data-v="trust" aria-selected="false">5 · Trust</button>
+      </nav>
+    </div>
+  </div>
+</header>
+
+<main class="wrap">
+
+  <!-- HOME -->
+  <div class="room on" id="room-home">
+    <div class="rhead"><h1>Good morning, Sample Properties</h1><p class="muted">One office for deals, money, compliance and now building safety. Everything below updates as you act in any room.</p></div>
+    <div class="homegrid" id="homegrid"></div>
+  </div>
+
+  <!-- DEALS -->
+  <div class="room" id="room-deals">
+    <div class="rhead"><h1>Deals</h1><p class="muted">Sales, off-plan and rentals. Each building's Law 3 status now shows on its deals.</p></div>
+    <div class="card"><div class="bd" style="overflow-x:auto"><table class="tbl" id="dealrows"></table></div></div>
+  </div>
+
+  <!-- FINANCE -->
+  <div class="room" id="room-finance">
+    <div class="rhead"><h1>Finance</h1><p class="muted">Invoices with TRN and VAT, commission splits and payments. Every approval is pinned to the facts it depends on.</p></div>
+    <div class="grid fin">
+      <div class="card"><div class="hd"><h2>Invoices</h2><span class="small muted">TRN 100 0000 0000 0003 (sample) · VAT 5%</span></div><div class="bd" style="overflow-x:auto"><table class="tbl" id="invrows"></table></div></div>
+      <div class="card">
+        <div class="hd"><h2>Contractor payment · CON-311</h2><span id="pay-chip"></span></div>
+        <div class="bd">
+          <div class="small muted">Sample Contracting LLC → Al Noor Residence Owners' Association · Exit sign repair, stair A level 3</div>
+          <div class="amt"><b>AED 1,942.50</b><span class="muted small">AED 1,850.00 + VAT 92.50</span></div>
+          <div class="small muted" style="margin-bottom:8px">This approval is pinned to these facts. If one changes, it stops and Compliance sees it first.</div>
+          <div class="pins" id="pins"></div>
+          <div class="actions">
+            <button class="btn primary" id="pay-ok">Approve payment</button>
+            <button class="btn" id="go-verify">Open the fix in Site Witness</button>
+          </div>
+          <div class="demo"><span class="small muted">Try it:</span> <button class="btn danger" id="bank-change">Contractor changes bank details</button></div>
+          <div class="trail" id="pay-trail"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- COMPLIANCE -->
+  <div class="room" id="room-compliance">
+    <div class="rhead"><h1>Compliance</h1><p class="muted">AML screening and goAML reports, plus each building's Law 3 deadline. Compliance sees every changed fact first.</p></div>
+    <div class="card" style="margin-bottom:40px"><div class="bd" id="complist" style="display:grid;gap:10px"></div></div>
+  </div>
+
+  <!-- OPERATIONS -->
+  <div class="room" id="room-ops">
+    <div class="rhead"><h1>Operations</h1><p class="muted">Each task lists the facts it depends on, so it unblocks or reopens by itself.</p></div>
+    <div class="card" style="margin-bottom:40px"><div class="bd" style="overflow-x:auto"><table class="tbl" id="taskrows"></table></div></div>
+  </div>
+
+  <!-- FRONT DESK -->
+  <div class="room" id="room-desk">
+    <div class="rhead"><h1>Front Desk</h1><p class="muted">The owner's 20-second morning briefing, written from today's facts.</p></div>
+    <div class="grid two">
+      <div class="card"><div class="hd"><h2>Owner briefing · English</h2></div><div class="bd brief" id="brief-en"></div></div>
+      <div class="card"><div class="hd"><h2 style="font-family:var(--ar)">موجز المالك</h2><span class="small muted">Arabic</span></div><div class="bd brief ar" dir="rtl" id="brief-ar"></div></div>
+    </div>
+  </div>
+
+  <!-- RECORDS -->
+  <div class="room" id="room-records">
+    <div class="rhead"><h1>Records</h1><p class="muted">One event log across every room. Facts are superseded, never edited.</p></div>
+    <div class="card" style="margin-bottom:40px"><div class="bd trail" id="records" style="margin:0;font-size:13px"></div></div>
+  </div>
+
+  <!-- SITE WITNESS -->
+  <div class="room" id="room-site">
+    <div class="bhead">
+      <div>
+        <h1 id="b-name">Al Noor Residence, Deira</h1>
+        <div class="meta" id="b-meta"></div>
+      </div>
+      <div class="kpis">
+        <div class="kpi"><b id="k-fail">0</b><span>Problems found</span></div>
+        <div class="kpi"><b id="k-human">0</b><span>Need a human</span></div>
+        <div class="kpi"><b id="k-signed">0/0</b><span>Findings signed</span></div>
+        <div class="kpi"><b id="k-due">15 May 2027</b><span id="k-due-l">Report due (notice)</span></div>
+      </div>
+    </div>
+
+    <section class="view on" id="v-walk">
+      <div class="grid walk">
+        <div>
+          <div class="phone">
+            <div class="status"><span>10:42</span><span class="offline">● Offline · 3 clips queued</span></div>
+            <div class="cam">
+              <svg viewBox="0 0 300 400" role="img" aria-label="Camera view of a stairwell with an unlit exit sign">
+                <rect width="300" height="400" fill="#2b2d29"/>
+                <polygon points="0,400 110,250 190,250 300,400" fill="#3a3c37"/>
+                <rect x="110" y="120" width="80" height="130" fill="#34362f" stroke="#4a4c45"/>
+                <g stroke="#5a5c55" stroke-width="3"><line x1="40" y1="400" x2="120" y2="300"/><line x1="70" y1="400" x2="135" y2="315"/><line x1="100" y1="400" x2="150" y2="330"/></g>
+                <rect x="118" y="78" width="64" height="26" rx="3" fill="#1d3a2a" stroke="#2f4f3c"/>
+                <text x="150" y="96" text-anchor="middle" font-family="Inter" font-size="12" font-weight="700" fill="#3c6a50">EXIT</text>
+                <rect x="226" y="236" width="18" height="44" rx="5" fill="#b42318"/>
+                <rect x="230" y="228" width="10" height="10" rx="2" fill="#7a1a12"/>
+              </svg>
+              <div class="rec"><i></i>REC 03:50</div>
+              <div class="detect" style="left:37%;top:18%;width:24%;height:9%"><span>Exit sign not lit?</span></div>
+              <div class="detect" style="left:74%;top:56%;width:9%;height:14%;border-color:#a6d96a"><span style="background:#a6d96a">Extinguisher</span></div>
+            </div>
+            <div class="narr">
+              <div>“Stair A, level three. Exit sign above the door looks off. Extinguisher is here, tag present.”</div>
+              <div class="ar">الدرج أ، الطابق الثالث. لافتة الخروج تبدو مطفأة.</div>
+            </div>
+            <div class="ctrls"><small>Stair A · L3</small><button class="shutter" aria-label="Recording"></button><small>Arabic + English</small></div>
+          </div>
+        </div>
+        <div class="grid">
+          <div class="card">
+            <div class="hd"><h2>Coverage of the walk</h2><span class="small muted">Areas the camera has seen so far</span></div>
+            <div class="bd cover" id="coverage"></div>
+            <div class="bd" style="padding-top:0">
+              <div class="queue">⟳ <span><b>Offline mode.</b> 3 clips saved on the phone (basement, plant room, stair A). They upload and get checked as soon as signal returns. Nothing is lost.</span></div>
+            </div>
+          </div>
+          <div class="card">
+            <div class="hd"><h2>Live notes from the agent</h2><span class="small muted">Draft only · the engineer decides</span></div>
+            <div class="bd small" style="display:grid;gap:8px">
+              <div><span class="chip c-fail">Problem found</span> 03:50 · Exit sign above stair A door not lit</div>
+              <div><span class="chip c-ok">No issue seen</span> 02:58 · Extinguisher present and tagged, level 3</div>
+              <div><span class="chip c-human">Needs a human</span> 07:41 · Roof slab: possible exposed rebar, light too low to judge</div>
+              <div><span class="chip c-route">Document check</span> DCD annual certificate · not visible on camera</div>
+              <div class="muted">Faces and number plates are blurred before anything is saved.</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="view" id="v-review">
+      <div class="grid review">
+        <div class="card">
+          <div class="hd">
+            <h2 id="list-title">Findings</h2>
+            <div class="lock"><span class="small muted">Report locked until every finding is signed</span><div class="bar"><i id="lockbar" style="width:0%"></i></div></div>
+          </div>
+          <div id="list"></div>
+        </div>
+        <div class="card">
+          <div class="hd"><h2 id="d-title">Select a finding</h2><span id="d-chip"></span></div>
+          <div class="bd">
+            <div class="proof" id="d-proof"></div>
+            <div class="quote" id="d-quote"></div>
+            <div class="actions">
+              <button class="btn primary" id="a-confirm">Confirm &amp; sign</button>
+              <button class="btn" id="a-edit">Edit wording</button>
+              <button class="btn danger" id="a-over">Overturn</button>
+              <button class="btn" id="a-all" title="Demo shortcut">Sign all (demo)</button>
+            </div>
+            <div class="trail" id="d-trail"></div>
+            <div class="sigbox">
+              <div><b>Signed report</b><div class="small muted" id="sig-msg"></div></div>
+              <button class="btn primary" id="a-export" disabled>Export to Dubai Building Platform</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="view" id="v-verify">
+      <div class="card">
+        <div class="hd"><h2 id="vf-title">Verify the fix</h2><span class="chip c-fail" id="vf-chip">Open</span></div>
+        <div class="bd">
+          <p class="muted" style="margin-top:0">The contractor fixed it and re-filmed it. The finding closes only when the camera sees the fix <b>and</b> the engineer confirms. If the agent is unsure, it stays open. Closing it unlocks the contractor's payment in Finance.</p>
+          <div class="grid verify">
+            <div><div id="vf-before"></div><div class="frame-cap"><span>Before · walk 12 Nov 2026</span><span class="mono">frame #4a91…</span></div></div>
+            <div><div id="vf-after"></div><div class="frame-cap"><span>After · re-filmed 20 Nov 2026</span><span class="mono">frame #c7e2…</span></div></div>
+          </div>
+        </div>
+        <div class="state">
+          <span class="chip c-ok">Fix seen by camera</span>
+          <span class="small muted" id="vf-note">Same position matched; repaired item visible.</span>
+          <span style="flex:1"></span>
+          <button class="btn danger" id="vf-reject">Not fixed, keep open</button>
+          <button class="btn primary" id="vf-ok">Engineer confirms · close finding</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="view" id="v-owner">
+      <div class="grid owner">
+        <div class="card">
+          <div class="hd"><h2 class="rt" data-en="Where the building stands" data-ar="أين وصل المبنى">Where the building stands</h2>
+            <div class="lang" role="group" aria-label="Language"><button id="l-en" aria-pressed="true">English</button><button id="l-ar" aria-pressed="false">العربية</button></div>
+          </div>
+          <div class="bd steps" id="steps"></div>
+        </div>
+        <div class="grid">
+          <div class="card">
+            <div class="hd"><h2 class="rt" data-en="What is at stake" data-ar="ما المخاطر">What is at stake</h2></div>
+            <div class="bd risk">
+              <div><span>Fine if not compliant</span><b>Up to AED 1M</b></div>
+              <div><span>Lease attestation (Ejari) for units</span><b style="color:var(--fail)">Can be suspended</b></div>
+              <div><span>Certificate once issued</span><b>10 years</b></div>
+            </div>
+          </div>
+          <div class="card">
+            <div class="hd"><h2 class="rt" data-en="Fix list" data-ar="قائمة الإصلاحات">Fix list</h2><span class="small muted">From the signed report</span></div>
+            <div class="bd" style="padding-top:6px;overflow-x:auto">
+              <table class="tbl"><thead><tr><th>Fix</th><th>Contractor</th><th>Status</th></tr></thead><tbody id="fixrows"></tbody></table>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="view" id="v-trust">
+      <div class="grid trust">
+        <div class="card">
+          <div class="hd"><h2>How accurate the agent is, by check type</h2><span class="small muted">Illustrative numbers</span></div>
+          <div class="bd" style="overflow-x:auto">
+            <table class="tbl">
+              <thead><tr><th>Check type</th><th>Agreement with engineers</th><th></th><th>Mode</th></tr></thead>
+              <tbody>
+                <tr><td>Extinguisher present and tagged</td><td><div class="meter"><i style="width:92%;background:var(--ok)"></i></div></td><td class="mono">92%</td><td><span class="chip c-ok">Suggests</span></td></tr>
+                <tr><td>Exit sign lit</td><td><div class="meter"><i style="width:88%;background:var(--ok)"></i></div></td><td class="mono">88%</td><td><span class="chip c-ok">Suggests</span></td></tr>
+                <tr><td>Fire door closer fitted</td><td><div class="meter"><i style="width:79%;background:var(--human)"></i></div></td><td class="mono">79%</td><td><span class="chip c-human">Flags only</span></td></tr>
+                <tr><td>Concrete cracking</td><td><div class="meter"><i style="width:61%;background:var(--human)"></i></div></td><td class="mono">61%</td><td><span class="chip c-human">Flags only</span></td></tr>
+                <tr><td>Balustrade height</td><td><div class="meter"><i style="width:34%;background:var(--fail)"></i></div></td><td class="mono">34%</td><td><span class="chip c-route">Silent · human</span></td></tr>
+              </tbody>
+            </table>
+            <p class="small muted">Where accuracy is low the agent stays silent and hands the clause to the engineer. It never outputs “pass”.</p>
+          </div>
+        </div>
+        <div class="card">
+          <div class="hd"><h2>Model gate</h2><span class="small muted">A new model is used only if it wins and a person approves</span></div>
+          <div class="bd">
+            <div class="gate">
+              <div class="m"><b>Current · Model A v3</b><div class="small muted">Pinned on signed reports</div>
+                <dl><dt>Agreement</dt><dd>84%</dd><dt>Cost per walk</dt><dd>AED 4.10</dd><dt>Time per walk</dt><dd>6 min</dd></dl></div>
+              <div class="m new"><b>Candidate · Model B v1</b><div class="small muted">Tested on 120 checked clips</div>
+                <dl><dt>Agreement</dt><dd class="better">87%</dd><dt>Cost per walk</dt><dd class="better">AED 2.60</dd><dt>Time per walk</dt><dd class="better">4 min</dd></dl></div>
+            </div>
+            <div class="actions"><button class="btn primary" id="g-ok">Approve switch (Eng. lead)</button><button class="btn" id="g-no">Keep current</button></div>
+            <div class="trail" id="g-trail"><div>• Reports already signed keep the model they were made with.</div></div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <p class="foot">Mockup with invented sample data: buildings, people, prices and accuracy figures are illustrative only. Site Witness drafts findings; only the licensed engineer signs, and Dubai Municipality issues certificates.</p>
+</main>
+
+<div class="toast" id="toast" role="status"></div>
+
+<script>
+(function(){
+const $ = s => document.querySelector(s);
+const $$ = s => Array.from(document.querySelectorAll(s));
+
+/* ---------- drawings for proof frames ---------- */
+function box(x,y,w,h,c,label){
+  return `<rect x="${x}" y="${y}" width="${w}" height="${h}" fill="none" stroke="${c}" stroke-width="2" rx="4"/><rect x="${x}" y="${y-16}" width="${label.length*6.4+12}" height="15" rx="3" fill="${c}"/><text x="${x+6}" y="${y-5}" font-family="Inter" font-size="10.5" font-weight="600" fill="#1c1b18">${label}</text>`;
+}
+function scene(kind, o){
+  o = o || {};
+  const bg = '<rect width="320" height="200" fill="#2b2d29"/>';
+  const ts = `<rect x="8" y="8" width="64" height="18" rx="4" fill="rgba(0,0,0,.55)"/><text x="40" y="21" text-anchor="middle" font-family="JetBrains Mono" font-size="10" fill="#e8e6df">${o.t||'00:00'}</text>`;
+  let b='';
+  switch(kind){
+    case 'crack': b='<rect x="120" y="20" width="80" height="180" fill="#5d5f58"/><polyline points="150,30 162,70 148,95 168,130 155,165 170,195" fill="none" stroke="#1a1b19" stroke-width="3"/>'+box(140,60,40,110,'#fdb022','Crack'); break;
+    case 'rebar': b='<rect x="0" y="110" width="320" height="90" fill="#4c4e48"/><g stroke="#8a5a3c" stroke-width="3"><line x1="60" y1="140" x2="260" y2="140"/><line x1="70" y1="160" x2="250" y2="160"/></g><rect x="0" y="0" width="320" height="110" fill="#1d1e1b"/>'+box(50,128,220,44,'#fdb022','Low light'); break;
+    case 'panel': b='<g fill="#6b7280" stroke="#2b2d29" stroke-width="3">'+[0,1,2,3].map(r=>[0,1,2,3,4].map(c=>`<rect x="${30+c*52}" y="${20+r*44}" width="52" height="44"/>`).join('')).join('')+'</g>'; break;
+    case 'board': b='<rect x="110" y="40" width="100" height="130" fill="#6b6d66"/><g stroke="#f79009" stroke-width="2" fill="none"><path d="M150 80 q20 40 0 70"/><path d="M165 70 q25 50 5 90"/></g>'+box(105,35,110,140,'#fdb022','Open, unlabelled'); break;
+    case 'light': b='<polygon points="0,200 120,90 200,90 320,200" fill="#3a3c37"/><g fill="#fef3c7"><rect x="140" y="20" width="40" height="8" rx="3"/><rect x="60" y="20" width="40" height="8" rx="3"/><rect x="220" y="20" width="40" height="8" rx="3"/></g>'; break;
+    case 'door': b='<rect x="110" y="30" width="100" height="170" fill="#7b5e44"/><rect x="200" y="110" width="6" height="16" fill="#d0d5dd"/>'+box(108,26,64,22,'#fdb022','Closer missing'); break;
+    case 'ext': b='<rect width="320" height="200" fill="#34362f"/><rect x="146" y="70" width="28" height="80" rx="8" fill="#b42318"/><rect x="152" y="58" width="16" height="14" rx="3" fill="#7a1a12"/><rect x="176" y="96" width="14" height="20" fill="#f2f4f7"/>'+box(140,52,58,104,'#a6d96a','Tag present'); break;
+    case 'exit': b='<rect x="110" y="70" width="100" height="130" fill="#34362f" stroke="#4a4c45"/>'+(o.lit?'<rect x="120" y="30" width="80" height="32" rx="4" fill="#12b76a"/><text x="160" y="52" text-anchor="middle" font-family="Inter" font-weight="700" font-size="15" fill="#ecfdf3">EXIT</text>':'<rect x="120" y="30" width="80" height="32" rx="4" fill="#1d3a2a"/><text x="160" y="52" text-anchor="middle" font-family="Inter" font-weight="700" font-size="15" fill="#3c6a50">EXIT</text>')+box(114,24,92,44,o.lit?'#a6d96a':'#fdb022',o.lit?'Lit':'Not lit'); break;
+    case 'cctv': b='<rect width="320" height="200" fill="#3a3c37"/><rect x="150" y="40" width="44" height="18" rx="4" fill="#e4e7ec"/><circle cx="152" cy="49" r="5" fill="#101828"/>'+box(144,30,58,34,'#a6d96a','Camera'); break;
+    case 'room': b='<rect x="110" y="30" width="100" height="170" fill="#475467"/><circle cx="196" cy="118" r="5" fill="#d0d5dd"/>'+box(106,26,108,174,'#fdb022','Lock not visible'); break;
+    case 'rail': b='<rect x="0" y="120" width="320" height="80" fill="#4c4e48"/><g stroke="#d0d5dd" stroke-width="3"><line x1="40" y1="70" x2="280" y2="70"/>'+[0,1,2,3,4,5,6].map(i=>`<line x1="${50+i*36}" y1="70" x2="${50+i*36}" y2="120"/>`).join('')+'</g>'+box(36,62,248,64,'#fdb022','Height needs a tape'); break;
+    case 'sharps': b='<rect x="0" y="120" width="320" height="80" fill="#5d5f58"/><rect x="130" y="50" width="60" height="72" rx="4" fill="#fdb022"/><rect x="130" y="50" width="60" height="10" fill="#b54708"/>'+(o.lit?box(124,44,72,82,'#a6d96a','New, empty'):'<rect x="134" y="62" width="52" height="56" fill="#f2f4f7" opacity=".45"/>'+box(124,44,72,82,'#fdb022','Over 3/4 full')); break;
+    case 'bins': b='<rect x="70" y="80" width="50" height="80" fill="#f2f4f7"/><rect x="135" y="80" width="50" height="80" fill="#fdb022"/><rect x="200" y="80" width="50" height="80" fill="#b42318"/>'+box(64,74,192,92,'#a6d96a','Colour-coded'); break;
+    case 'meds': b='<rect x="40" y="30" width="240" height="150" fill="#5d5f58"/><g fill="#e4e7ec">'+[0,1,2,3,4,5].map(i=>`<rect x="${56+i*36}" y="60" width="24" height="40"/>`).join('')+'</g>'+box(160,54,36,52,'#fdb022','Expiry 2025'); break;
+    case 'cart': b='<rect x="110" y="40" width="100" height="130" fill="#b42318"/><g fill="#7a1a12"><rect x="118" y="60" width="84" height="24"/><rect x="118" y="92" width="84" height="24"/><rect x="118" y="124" width="84" height="24"/></g>'+box(104,34,112,142,'#fdb022','Seal unclear'); break;
+    default: b='<text x="160" y="105" text-anchor="middle" font-family="Inter" font-size="13" fill="#98a2b3">No frame: checked from documents</text>';
+  }
+  return `<svg viewBox="0 0 320 200" role="img" aria-label="Proof frame">${bg}${b}${ts}</svg>`;
+}
+
+/* ---------- data ---------- */
+const V = {fail:['c-fail','Problem found'], human:['c-human','Needs a human'], ok:['c-ok','No issue seen'], doc:['c-route','Document check'], lab:['c-route','Lab test only']};
+const LAW3 = { key:'law3', title:'Findings by Law 3 checklist area (Art. 7(d))', fixId:'F2',
+  name:'Al Noor Residence, Deira',
+  meta:'Completion certificate 2001 · 25 years old · 9 floors · Certificate valid 10 years once issued · Engineer: Eng. R. Haddad, Sample Engineering Consultants',
+  due:['15 May 2027','Report due (notice)'],
+  areas:[
+    ['Structure',[
+      {id:'S1',t:'Diagonal crack on car park column C4',v:'fail',ts:'03:12',k:'crack',q:'“Basement, column C4, there is a diagonal crack about this long.”'},
+      {id:'S2',t:'Possible exposed rebar, roof slab',v:'human',ts:'07:41',k:'rebar',q:'Agent: light too low to judge; flagged for the engineer.'},
+      {id:'S3',t:'Concrete core strength',v:'lab',ts:'—',k:'none',q:'Not a camera check. Needs an accredited lab result attached.'}]],
+    ['External cladding',[
+      {id:'C1',t:'East facade panels intact',v:'ok',ts:'01:05',k:'panel',q:'No missing or loose panels seen in this frame.'},
+      {id:'C2',t:'Cladding fire rating',v:'doc',ts:'—',k:'none',q:'Material cannot be identified by camera. Upload certificate.'}]],
+    ['Electrical and mechanical, common areas',[
+      {id:'E1',t:'Distribution board open and unlabelled, L2',v:'fail',ts:'05:22',k:'board',q:'“Level two riser, the board is open, no labels on the breakers.”'},
+      {id:'E2',t:'Corridor lighting working, L1 to L9',v:'ok',ts:'02:40',k:'light',q:'All corridor fittings lit in the walk.'}]],
+    ['Windows, doors and barriers',[
+      {id:'W1',t:'Fire door closer missing, stair B',v:'fail',ts:'04:18',k:'door',q:'“Stair B door, the closer arm is gone.”'},
+      {id:'W2',t:'Roof balustrade height',v:'human',ts:'08:02',k:'rail',q:'Measurement needed. Phone video is not used for heights.'}]],
+    ['Dubai Civil Defence',[
+      {id:'F1',t:'Extinguisher present and tagged, L3',v:'ok',ts:'02:58',k:'ext',q:'“Extinguisher is here, tag present.”'},
+      {id:'F2',t:'Exit sign not lit, stair A L3',v:'fail',ts:'03:50',k:'exit',q:'“Exit sign above the door looks off.”'},
+      {id:'F3',t:'DCD annual certificate',v:'doc',ts:'—',k:'none',q:'Upload the current Civil Defence certificate.'}]],
+    ['SIRA CCTV',[
+      {id:'V1',t:'Cameras at main entrance',v:'ok',ts:'00:32',k:'cctv',q:'Two cameras visible at the entrance.'},
+      {id:'V2',t:'Recorder room secured',v:'human',ts:'06:10',k:'room',q:'Lock not visible in frame; engineer to confirm.'}]]
+  ]};
+const DHA = { key:'dha', title:'Findings by DHA outpatient checklist (sample items)', fixId:'D1',
+  name:'Sample Family Clinic, Al Barsha',
+  meta:'Weekly self-inspection before DHA visits · Medical director: Dr. S. Nair · Same engine, different rulebook',
+  due:['Weekly','Self-inspection cycle'],
+  areas:[
+    ['Infection control',[
+      {id:'D1',t:'Sharps box over three-quarters full, room 2',v:'fail',ts:'01:14',k:'sharps',q:'“Treatment room two, sharps box is nearly full.”'},
+      {id:'D2',t:'Waste bins colour-coded',v:'ok',ts:'01:40',k:'bins',q:'Three colour-coded bins seen.'}]],
+    ['Medicines',[
+      {id:'D3',t:'Expired medicine on shelf',v:'fail',ts:'02:55',k:'meds',q:'Expiry label 2025 read on one box.'},
+      {id:'D4',t:'Vaccine fridge temperature log',v:'doc',ts:'—',k:'none',q:'Upload the temperature log for the last 30 days.'}]],
+    ['Emergency readiness',[
+      {id:'D5',t:'Crash cart sealed',v:'human',ts:'03:30',k:'cart',q:'Seal not clear in frame; medical director to confirm.'}]]
+  ]};
+const STEPS_EN = [
+  ['Owner appoints a licensed engineering office','Owner / owners’ association'],
+  ['Engineer walks and assesses the building','Engineering office · Site Witness'],
+  ['Signed report submitted with fix timeline','Engineering office'],
+  ['Dubai Municipality issues a remediation permit','Dubai Municipality'],
+  ['Contractor fixes under supervision · camera verifies','Contractor · Site Witness'],
+  ['Engineer applies for the certificate','Engineering office'],
+  ['Municipality inspects and issues the certificate','Dubai Municipality']];
+const STEPS_AR = ['يعيّن المالك مكتباً هندسياً مرخصاً','يتفقد المهندس المبنى ويقيّمه','تقديم التقرير الموقّع مع جدول الإصلاحات','تصدر البلدية تصريح الإصلاح','ينفذ المقاول الإصلاحات وتتحقق الكاميرا','يتقدم المهندس بطلب الشهادة','تفتش البلدية وتصدر الشهادة'];
+
+/* ---------- shared state across rooms ---------- */
+const S = { book:LAW3, signed:{}, sel:null, exported:false, fixClosed:false, fixRejected:false,
+  bankChanged:false, bankVerified:false, paid:false, rearFiled:false, modelB:false, lang:'en', room:'home', audit:[] };
+const L = { law3Signed:{}, dhaSigned:{} };
+
+function all(){ return S.book.areas.flatMap(a=>a[1]); }
+function law3All(){ return LAW3.areas.flatMap(a=>a[1]); }
+function law3SignedCount(){ return law3All().filter(x=>L.law3Signed[x.id]).length; }
+function law3AllSigned(){ return law3SignedCount()===law3All().length; }
+function log(room,msg){ const d=new Date(); S.audit.unshift({t:d.toTimeString().slice(0,5),room,msg}); }
+function toast(m){ const t=$('#toast'); t.textContent=m; t.classList.add('show'); clearTimeout(t._h); t._h=setTimeout(()=>t.classList.remove('show'),2600); }
+const aed = n => 'AED '+n.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
+function signedMap(){ return S.book===LAW3 ? L.law3Signed : L.dhaSigned; }
+
+/* derived statuses */
+function law3Status(){
+  if(S.exported) return ['c-signed','Report submitted'];
+  if(law3AllSigned()) return ['c-human','Signed, ready to submit'];
+  return ['c-human',`Walk done · ${law3SignedCount()}/${law3All().length} signed`];
+}
+function payPins(){
+  const fixOk = S.fixClosed;
+  const bankOk = !S.bankChanged || S.bankVerified;
+  return [
+    {ok:fixOk, label:'Fix F2 seen by camera and confirmed by engineer', state: fixOk?'Verified':'Waiting'},
+    {ok:bankOk, label:'Payee bank account', state: S.bankChanged ? (S.bankVerified?'****9052 · verified by Compliance':'Changed to ****9052 · stopped') : '****4417 · on file'},
+    {ok:true, label:'Amount matches the approved quote', state:'AED 1,850.00'}];
+}
+function payStatus(){
+  if(S.paid) return ['c-signed','Approved for payment'];
+  if(payPins().every(p=>p.ok)) return ['c-human','Ready to approve'];
+  if(S.bankChanged && !S.bankVerified) return ['c-fail','Stopped: bank details changed'];
+  return ['c-route','Locked until fix verified'];
+}
+function complianceItems(){
+  const items = [
+    {c:'c-ok',l:'Done',t:'Buyer screening · Deal D-218, Villa 12 Arabian Ranches',sub:'Sanctions and PEP checks clear'},
+    {c:S.rearFiled?'c-signed':'c-human',l:S.rearFiled?'Filed':'MLRO to file',t:'Cash payment AED 60,000 on Deal D-218',sub:'Over the AED 55,000 threshold · goAML real-estate report drafted',btn:S.rearFiled?null:['rear','MLRO approves filing']},
+    {c:law3Status()[0],l:law3Status()[1],t:'Law 3 · Al Noor Residence, Deira',sub:'Building 25 years old · report due 15 May 2027 (notice)',btn:['site','Open in Site Witness']},
+    {c:'c-route',l:'Watch',t:'Law 3 · Marina Court (sample)',sub:'Building 22 years old · no Municipality notice yet'}];
+  if(S.bankChanged && !S.bankVerified) items.unshift({c:'c-fail',l:'Stopped',t:'Contractor bank details changed · CON-311',sub:'Sample Contracting LLC now asks for ****9052 instead of ****4417. Payment approval stopped until you verify by phone.',btn:['bank','Verified with contractor by phone']});
+  return items;
+}
+function openCompliance(){ return complianceItems().filter(i=>i.c==='c-fail'||i.c==='c-human').length; }
+function openFinance(){ return payStatus()[1]==='Ready to approve' || (S.bankChanged&&!S.bankVerified) ? 1 : 0; }
+
+/* ---------- room rendering ---------- */
+const ROOMS = {home:'Home',deals:'Deals',finance:'Finance',compliance:'Compliance',ops:'Operations',desk:'Front Desk',records:'Records',site:'Site Witness'};
+function setRoom(r, tab){
+  S.room=r;
+  $$('.rooms button').forEach(b=>b.toggleAttribute('aria-current', b.dataset.room===r));
+  $$('.rooms button').forEach(b=>{ if(b.dataset.room===r) b.setAttribute('aria-current','page'); else b.removeAttribute('aria-current'); });
+  $$('.room').forEach(x=>x.classList.remove('on')); $('#room-'+r).classList.add('on');
+  $('#crumb').textContent = ROOMS[r];
+  $('#site-sub').hidden = r!=='site';
+  if(r==='site' && tab) setTab(tab);
+  renderEverything();
+  window.scrollTo({top:0,behavior:'smooth'});
+}
+function setTab(v){
+  $$('.tab').forEach(x=>x.setAttribute('aria-selected', x.dataset.v===v ? 'true':'false'));
+  $$('section.view').forEach(s=>s.classList.remove('on')); $('#v-'+v).classList.add('on');
+}
+
+function renderHome(){
+  const [lc,ll]=law3Status(), [pc,pl]=payStatus();
+  const cards = [
+    ['deals','Deals','3 active: 1 sale, 1 rental, 1 off-plan', S.exported?['c-signed','Ejari risk cleared']:['c-human','1 rental at Ejari risk']],
+    ['finance','Finance','Commission AED 67,200 paid · split AED 33,600 approved',[pc,pl]],
+    ['compliance','Compliance',`${openCompliance()} item(s) need a person`, openCompliance()?['c-human','Action needed']:['c-ok','All clear']],
+    ['ops','Operations','Tasks linked to facts', ['c-route','Auto-updating']],
+    ['desk','Front Desk','Owner briefing ready in English and Arabic',['c-ok','Ready']],
+    ['records','Records',`${S.audit.length+3} events logged today`,['c-route','Audit trail']],
+    ['site','Site Witness','Al Noor Residence · Law 3 safety walk',[lc,ll]]];
+  $('#homegrid').innerHTML = cards.map(([k,n,line,[c,l]])=>`<button class="rcard ${k==='site'?'newroom':''}" data-go="${k}">
+    <h3>${n}${k==='site'?' <span class="newtag">new</span>':''}</h3><div class="line">${line}</div><div><span class="chip ${c}">${l}</span></div></button>`).join('');
+  $$('#homegrid [data-go]').forEach(b=>b.onclick=()=>setRoom(b.dataset.go));
+}
+function renderDeals(){
+  const [lc,ll] = S.exported?['c-signed','Report submitted · Ejari risk cleared']:['c-human','Certificate pending · Ejari at risk'];
+  $('#dealrows').innerHTML = `<thead><tr><th>Deal</th><th>Type</th><th>Property</th><th class="num">Value</th><th>Stage</th><th>Building Law 3</th></tr></thead><tbody>
+    <tr><td class="mono">D-218</td><td>Secondary sale</td><td>Villa 12, Arabian Ranches</td><td class="num">AED 3,200,000</td><td>Transfer booked</td><td><span class="chip c-route">Under 20 years · not due</span></td></tr>
+    <tr><td class="mono">D-219</td><td>Rental</td><td>Flat 504, <button class="link" data-go="site">Al Noor Residence</button></td><td class="num">AED 78,000 / yr</td><td>Ejari renewal 1 Feb 2027</td><td><span class="chip ${lc}">${ll}</span></td></tr>
+    <tr><td class="mono">D-220</td><td>Off-plan</td><td>Unit 1208, Sample Heights</td><td class="num">AED 1,450,000</td><td>Oqood registered</td><td><span class="chip c-route">New building</span></td></tr></tbody>`;
+  $$('#dealrows [data-go]').forEach(b=>b.onclick=()=>setRoom('site','owner'));
+}
+function renderFinance(){
+  const reportReady = law3AllSigned();
+  const [pc,pl] = payStatus();
+  const rows = [
+    ['INV-1041','Commission 2% · Villa 12 sale','Buyer',64000,['c-signed','Paid']],
+    ['INV-1042','Commission split 50% · co-broker','Sample Realty',32000,['c-signed','Approved']],
+    ['SW-007','Law 3 technical report · Al Noor Residence','Owners’ association',24000, S.exported?['c-signed','Issued']:reportReady?['c-human','Ready to issue']:['c-route','Issues when report is signed']],
+    ['CON-311','Exit sign repair · stair A L3','Sample Contracting LLC',1850,[pc,pl]]];
+  $('#invrows').innerHTML = `<thead><tr><th>No.</th><th>What</th><th>Party</th><th class="num">Net</th><th class="num">VAT 5%</th><th class="num">Total</th><th>Status</th></tr></thead><tbody>`+
+    rows.map(r=>`<tr><td class="mono">${r[0]}</td><td>${r[1]}</td><td>${r[2]}</td><td class="num">${r[3].toLocaleString('en-US',{minimumFractionDigits:2})}</td><td class="num">${(r[3]*.05).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})}</td><td class="num">${(r[3]*1.05).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})}</td><td><span class="chip ${r[4][0]}">${r[4][1]}</span></td></tr>`).join('')+'</tbody>';
+  $('#pay-chip').innerHTML = `<span class="chip ${pc}">${pl}</span>`;
+  $('#pins').innerHTML = payPins().map(p=>`<div class="pin"><span>${p.ok?'✓':'✗'} ${p.label}</span><span class="chip ${p.ok?'c-ok':(p.label.startsWith('Payee')?'c-fail':'c-route')}">${p.state}</span></div>`).join('');
+  $('#pay-ok').disabled = S.paid || !payPins().every(p=>p.ok);
+  $('#bank-change').disabled = S.bankChanged || S.paid;
+  $('#pay-trail').innerHTML = S.audit.filter(a=>a.room==='Finance').slice(0,4).map(a=>`<div>• ${a.t} · ${a.msg}</div>`).join('');
+}
+function renderCompliance(){
+  $('#complist').innerHTML = complianceItems().map(i=>`<div class="citem"><span class="chip ${i.c}">${i.l}</span>
+    <div><div style="font-weight:600">${i.t}</div><div class="sub">${i.sub}</div></div>
+    <div>${i.btn?`<button class="btn ${i.btn[0]==='site'?'':'primary'}" data-act="${i.btn[0]}">${i.btn[1]}</button>`:''}</div></div>`).join('');
+  $$('#complist [data-act]').forEach(b=>b.onclick=()=>{
+    const a=b.dataset.act;
+    if(a==='site') return setRoom('site','review');
+    if(a==='rear'){ S.rearFiled=true; log('Compliance','goAML real-estate report for Deal D-218 approved and filed by MLRO'); toast('goAML report filed (mock)'); }
+    if(a==='bank'){ S.bankVerified=true; log('Compliance','New bank account ****9052 verified with contractor by phone'); toast('Bank account verified · Finance can approve again'); }
+    renderEverything();
+  });
+}
+function renderOps(){
+  const t = [
+    ['Book contractor for exit sign repair','Finding F2 = problem found', ['c-signed','Done']],
+    ['Re-film the repaired exit sign','Contractor reports fix done', S.fixClosed?['c-signed','Done']:['c-human','Waiting for engineer']],
+    ['Pay contractor CON-311','F2 fix verified · bank account unchanged or verified', S.paid?['c-signed','Done']:payStatus()],
+    ['Submit Law 3 report to Dubai Building Platform','All findings signed', S.exported?['c-signed','Done']:law3AllSigned()?['c-human','Ready']:['c-route','Waiting for signatures']],
+    ['Renew Ejari, Flat 504 Al Noor Residence','Law 3 report submitted', S.exported?['c-human','Ready']:['c-fail','Blocked risk']],
+    ['File goAML report for Deal D-218','Cash AED 60,000 recorded', S.rearFiled?['c-signed','Done']:['c-human','MLRO to file']]];
+  $('#taskrows').innerHTML = `<thead><tr><th>Task</th><th>Depends on fact</th><th>Status</th></tr></thead><tbody>`+t.map(r=>`<tr><td>${r[0]}</td><td class="muted small">${r[1]}</td><td><span class="chip ${r[2][0]}">${r[2][1]}</span></td></tr>`).join('')+'</tbody>';
+}
+function renderDesk(){
+  const fails = law3All().filter(x=>x.v==='fail').length, s=law3SignedCount(), n=law3All().length;
+  $('#brief-en').innerHTML = `<p>Good morning. <b>Al Noor Residence:</b> the safety walk found ${fails} problems, and ${s} of ${n} findings are signed${S.exported?'; the report has been submitted to the Municipality':''}.</p>
+    <p>The exit sign repair is <b>${S.fixClosed?'verified and closed':'waiting for the engineer to confirm'}</b>. The contractor payment is <b>${S.paid?'approved':S.bankChanged&&!S.bankVerified?'stopped because the bank details changed':'waiting'}</b>.</p>
+    <p>One cash payment on the Arabian Ranches villa ${S.rearFiled?'has been reported to goAML':'needs the compliance officer to file a goAML report'}.</p>`;
+  $('#brief-ar').innerHTML = `<p>صباح الخير. <b>مبنى النور السكني:</b> رصدت جولة السلامة ${fails} مشكلات، وتم توقيع ${s} من أصل ${n} ملاحظة.${S.exported?' تم تقديم التقرير إلى البلدية.':''}</p>
+    <p>إصلاح لافتة الخروج <b>${S.fixClosed?'تم التحقق منه وإغلاقه':'بانتظار تأكيد المهندس'}</b>. دفعة المقاول <b>${S.paid?'تمت الموافقة عليها':S.bankChanged&&!S.bankVerified?'متوقفة بسبب تغيير بيانات الحساب البنكي':'بانتظار الموافقة'}</b>.</p>
+    <p>${S.rearFiled?'تم تقديم تقرير goAML عن الدفعة النقدية على فيلا المرابع العربية.':'هناك دفعة نقدية على فيلا المرابع العربية تحتاج إلى تقرير goAML من مسؤول الامتثال.'}</p>`;
+}
+function renderRecords(){
+  const base = [{t:'09:10',room:'Site Witness',msg:'Walk recorded at Al Noor Residence, 9 min 40 s; 3 clips uploaded after offline period'},{t:'09:12',room:'Site Witness',msg:'Agent drafted 13 findings with Model A v3 (pinned)'},{t:'08:30',room:'Finance',msg:'INV-1041 commission paid, AED 67,200'}];
+  $('#records').innerHTML = [...S.audit, ...base].map(a=>`<div>• <span class="mono">${a.t}</span> · <b>${a.room}</b> · ${a.msg}</div>`).join('');
+}
+function renderBadges(){
+  const c=openCompliance(), f=openFinance();
+  $('#b-comp').textContent = c||''; $('#b-fin').textContent = f||'';
+}
+
+/* ---------- Site Witness ---------- */
+function renderKpis(){
+  const f=all(), sm=signedMap();
+  $('#b-name').textContent=S.book.name; $('#b-meta').textContent=S.book.meta;
+  $('#k-due').textContent=S.book.due[0]; $('#k-due-l').textContent=S.book.due[1];
+  $('#k-fail').textContent=f.filter(x=>x.v==='fail').length;
+  $('#k-human').textContent=f.filter(x=>x.v==='human').length;
+  const s=f.filter(x=>sm[x.id]).length;
+  $('#k-signed').textContent=`${s}/${f.length}`;
+  $('#lockbar').style.width=Math.round(100*s/f.length)+'%';
+  const done = s===f.length, isLaw=S.book===LAW3;
+  $('#a-export').disabled = !done || (isLaw && S.exported);
+  $('#a-export').textContent = isLaw ? (S.exported?'Submitted to Dubai Building Platform':'Export to Dubai Building Platform') : 'Save self-inspection record';
+  $('#sig-msg').textContent = done ? 'Released: every finding signed.' : `Locked: ${f.length-s} finding(s) still to sign.`;
+}
+function renderList(){
+  const sm=signedMap();
+  $('#list-title').textContent=S.book.title;
+  $('#list').innerHTML=S.book.areas.map(([name,items])=>`<div class="area"><h3>${name}</h3>${items.map(it=>{
+    const [c,l]=V[it.v], s=sm[it.id];
+    return `<div class="finding ${S.sel===it.id?'sel':''}" data-id="${it.id}" tabindex="0">
+      <div class="t">${it.t}</div><div>${s?`<span class="chip c-signed">${s==='over'?'Overturned':'Signed'}</span>`:`<span class="chip ${c}">${l}</span>`}</div>
+      <div class="s"><span class="mono">${it.id}</span><span>${it.ts==='—'?'no frame':'frame '+it.ts}</span></div></div>`;}).join('')}</div>`).join('');
+  $$('.finding').forEach(el=>{ el.onclick=()=>select(el.dataset.id); el.onkeydown=e=>{ if(e.key==='Enter') select(el.dataset.id); }; });
+}
+function select(id){
+  S.sel=id; const it=all().find(x=>x.id===id); if(!it) return;
+  const [c,l]=V[it.v], s=signedMap()[it.id];
+  $('#d-title').textContent=`${it.id} · ${it.t}`;
+  $('#d-chip').innerHTML=`<span class="chip ${c}">${l}</span>`;
+  $('#d-proof').innerHTML=scene(it.k,{t:it.ts==='—'?'docs':it.ts})+`<div class="cap small"><span class="muted">${it.ts==='—'?'Routed away from the camera':'Proof frame from the walk video, '+it.ts}</span><span class="mono muted">${it.ts==='—'?'':(S.modelB?'model B v1':'model A v3')+' · frame '+(it.id.charCodeAt(0)*7919+it.id.charCodeAt(1)*31).toString(16).slice(0,4)+'…'}</span></div>`;
+  $('#d-quote').innerHTML=it.q;
+  $('#d-trail').innerHTML=`<div>• Agent drafted “${l}” at ${it.ts}</div>${s?`<div>• Engineer ${s==='over'?'overturned it (reason logged)':'confirmed and signed'}</div>`:''}`;
+  ['#a-confirm','#a-over','#a-edit'].forEach(q=>$(q).disabled=!!s);
+  renderList();
+}
+function act(kind){
+  if(!S.sel) return; const sm=signedMap(); sm[S.sel]=kind;
+  log('Site Witness',`${S.sel} ${kind==='over'?'overturned':'signed'} by the engineer`);
+  toast(kind==='over'?'Finding overturned, reason logged':'Finding signed');
+  const next=all().find(x=>!sm[x.id]);
+  if(!next && S.book===LAW3) toast('All signed · report fee SW-007 is ready to issue in Finance');
+  renderEverything(); select(next?next.id:S.sel);
+}
+function renderCoverage(){
+  const rows = S.book===LAW3 ? [['Structure',72],['External cladding',100],['E&M common areas',64],['Doors and barriers',58],['Civil Defence',80],['SIRA CCTV',50]] : [['Infection control',90],['Medicines',70],['Emergency readiness',40]];
+  $('#coverage').innerHTML=rows.map(([n,p])=>`<div class="cover-row"><span>${n}</span><div class="bar"><i style="width:${p}%"></i></div><span class="mono small">${p}%</span></div>`).join('');
+}
+function renderSteps(){
+  const ar=S.lang==='ar';
+  const now = S.exported ? 4 : 2; // index of current step
+  $('#steps').innerHTML=STEPS_EN.map((s,i)=>{ const cls=i<now?'done':i===now?'now':'';
+    return `<div class="step ${cls}"><div class="dot">${cls==='done'?'✓':i+1}</div><div><div class="rt" style="font-weight:600">${ar?STEPS_AR[i]:s[0]}</div><div class="who">${s[1]}</div></div>
+    <div>${cls==='now'?`<span class="chip c-human">${i===2?'Due 15 May 2027':'In progress'}</span>`:cls==='done'?'<span class="chip c-signed">Done</span>':''}</div></div>`;}).join('');
+}
+function renderFixes(){
+  const f=all().filter(x=>x.v==='fail'), fx=S.book.fixId;
+  $('#fixrows').innerHTML=f.map(x=>`<tr><td>${x.t}</td><td>${x.id===fx?'Sample Contracting LLC':'To assign'}</td><td>${x.id===fx?(S.fixClosed?'<span class="chip c-signed">Closed · camera + engineer</span>':'<span class="chip c-human">Fix filmed · awaiting engineer</span>'):'<span class="chip c-fail">Open</span>'}</td></tr>`).join('');
+}
+function renderVerify(){
+  const isLaw=S.book===LAW3;
+  $('#vf-title').textContent = isLaw?'Verify the fix · Exit sign, stair A, level 3':'Verify the fix · Sharps box, treatment room 2';
+  $('#vf-before').innerHTML = isLaw?scene('exit',{t:'03:50'}):scene('sharps',{t:'01:14'});
+  $('#vf-after').innerHTML = isLaw?scene('exit',{t:'00:14',lit:true}):scene('sharps',{t:'00:09',lit:true});
+  $('#vf-note').textContent = isLaw?'Sign now shows lit green EXIT text; same door and wall position matched.':'New empty sharps box in the same bracket.';
+  $('#vf-chip').className='chip '+(S.fixClosed?'c-signed':'c-fail'); $('#vf-chip').textContent=S.fixClosed?'Closed':'Open';
+  $('#vf-ok').disabled=S.fixClosed;
+}
+function renderSite(){ renderKpis(); renderList(); renderCoverage(); renderSteps(); renderFixes(); renderVerify(); }
+function setBook(b){
+  S.book=b; S.sel=null; S.fixClosed = false;
+  $('#rb-law3').setAttribute('aria-pressed',b===LAW3); $('#rb-dha').setAttribute('aria-pressed',b===DHA);
+  log('Site Witness',`Rulebook switched to ${b===LAW3?'Dubai Law 3':'DHA clinic checklist'}`);
+  renderEverything(); select(all()[0].id);
+}
+function setLang(ar){
+  S.lang=ar?'ar':'en';
+  $('#l-en').setAttribute('aria-pressed',!ar); $('#l-ar').setAttribute('aria-pressed',ar);
+  $('#v-owner').setAttribute('dir',ar?'rtl':'ltr');
+  $$('#v-owner .rt[data-en]').forEach(el=>el.textContent=ar?el.dataset.ar:el.dataset.en);
+  renderSteps();
+}
+
+function renderEverything(){ renderBadges(); renderHome(); renderDeals(); renderFinance(); renderCompliance(); renderOps(); renderDesk(); renderRecords(); renderSite(); }
+
+/* ---------- events ---------- */
+$('#go-home').onclick=()=>setRoom('home');
+$$('.rooms button').forEach(b=>b.onclick=()=>setRoom(b.dataset.room));
+$$('.tab').forEach(t=>t.onclick=()=>setTab(t.dataset.v));
+$('#rb-law3').onclick=()=>setBook(LAW3);
+$('#rb-dha').onclick=()=>setBook(DHA);
+$('#a-confirm').onclick=()=>act('signed');
+$('#a-over').onclick=()=>act('over');
+$('#a-edit').onclick=()=>toast('Wording opened for edit · the change will be logged');
+$('#a-all').onclick=()=>{ const sm=signedMap(); all().forEach(x=>{ if(!sm[x.id]) sm[x.id]='signed'; }); log('Site Witness','All remaining findings signed by the engineer (demo shortcut)'); toast(S.book===LAW3?'All signed · report fee SW-007 ready in Finance':'All signed'); renderEverything(); select(S.sel||all()[0].id); };
+$('#a-export').onclick=()=>{
+  if(S.book===LAW3){ S.exported=true; log('Site Witness','Signed Law 3 report exported to Dubai Building Platform (mock)'); toast('Report submitted · Ejari risk on Flat 504 cleared in Deals'); }
+  else { log('Site Witness','Clinic self-inspection record saved'); toast('Self-inspection saved'); }
+  renderEverything();
+};
+$('#vf-ok').onclick=()=>{ S.fixClosed=true; log('Site Witness',`${S.book.fixId} closed: fix seen by camera and confirmed by engineer`); toast(S.book===LAW3?'Finding closed · contractor payment unlocked in Finance':'Finding closed'); renderEverything(); };
+$('#vf-reject').onclick=()=>{ S.fixClosed=false; log('Site Witness',`${S.book.fixId} fix rejected by engineer; stays open`); toast('Kept open · contractor notified'); renderEverything(); };
+$('#g-ok').onclick=()=>{ S.modelB=true; $('#g-trail').innerHTML='<div>• Switch to Model B v1 approved by the engineering lead</div><div>• Reports already signed keep Model A v3.</div>'; log('Site Witness','Model gate: switch to Model B v1 approved by a person'); toast('Switch approved'); renderEverything(); };
+$('#g-no').onclick=()=>toast('Kept Model A v3');
+$('#l-en').onclick=()=>setLang(false);
+$('#l-ar').onclick=()=>setLang(true);
+$('#pay-ok').onclick=()=>{ S.paid=true; log('Finance','CON-311 approved for payment, AED 1,942.50 to account '+(S.bankChanged?'****9052':'****4417')); toast('Payment approved'); renderEverything(); };
+$('#go-verify').onclick=()=>{ if(S.book!==LAW3) setBook(LAW3); setRoom('site','verify'); };
+$('#bank-change').onclick=()=>{ S.bankChanged=true; S.bankVerified=false; log('Finance','Contractor asked to change bank account ****4417 → ****9052; approval stopped'); log('Compliance','Alert raised: payee bank details changed on CON-311'); toast('Approval stopped · Compliance alerted first'); renderEverything(); };
+
+renderEverything(); select(all()[0].id);
+})();
+</script>
+</body>
+</html>

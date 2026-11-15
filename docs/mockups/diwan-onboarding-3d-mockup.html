@@ -1,0 +1,514 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Diwan sign up</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Instrument+Serif:ital@0;1&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Arabic:wght@400;600&display=swap" rel="stylesheet">
+<style>
+/* Diwan tokens, copied from web/app.css: ink navy, sand gold, soft light */
+:root{
+  --bg:#0a0d13; --bg-2:#0f131c; --panel:rgba(19,24,35,.78); --panel-solid:#131823; --raise:#1a2030;
+  --line:rgba(255,255,255,.07); --line-2:rgba(255,255,255,.13);
+  --ink:#ece8df; --muted:#8b92a3; --faint:#5d6476;
+  --gold:#e8c77a; --gold-2:#f6e2ae; --gold-soft:rgba(232,199,122,.12);
+  --teal:#5ccfb5; --blue:#7ea6f8; --violet:#b591f3; --green:#82d99f;
+  --warn:#f0b35e; --warn-soft:rgba(240,179,94,.13); --bad:#f27d7d; --bad-soft:rgba(242,125,125,.13);
+  --ai:rgba(92,207,181,.12);
+  --font:"Inter",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --display:"Instrument Serif",Georgia,serif;
+  --mono:"IBM Plex Mono",ui-monospace,monospace;
+  --ar:"IBM Plex Sans Arabic","Geeza Pro",sans-serif;
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{margin:0;font:14px/1.5 var(--font);color:var(--ink);background:radial-gradient(1200px 520px at 15% -10%,rgba(232,199,122,.09),transparent 60%),radial-gradient(900px 480px at 100% 0%,rgba(92,207,181,.06),transparent 60%),var(--bg);-webkit-font-smoothing:antialiased;overflow:hidden}
+button,input,select{font:inherit;color:inherit}
+button{cursor:pointer}
+header.top{display:flex;align-items:center;gap:16px;height:56px;padding:0 20px;border-bottom:1px solid var(--line);background:rgba(10,13,19,.82);backdrop-filter:blur(14px);position:relative;z-index:5;flex-wrap:wrap}
+.brand{display:flex;align-items:center;gap:10px}
+.brand .word{font-family:var(--display);font-size:25px;line-height:1}
+.brand .tag{font-size:11px;color:var(--muted);border-left:1px solid var(--line-2);padding-left:10px;letter-spacing:.4px}
+.sample{font:500 10.5px var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--warn);background:var(--warn-soft);padding:3px 8px;border-radius:99px}
+.mode{margin-left:auto;display:flex;border:1px solid var(--line-2);border-radius:10px;overflow:hidden}
+.mode button{border:0;background:transparent;padding:7px 14px;color:var(--muted);font-weight:500;font-size:13px}
+.mode button[aria-pressed="true"]{background:var(--gold);color:#1b1608}
+
+.layout{position:absolute;inset:56px 0 0 0;display:grid;grid-template-columns:440px 1fr}
+@media (max-width:900px){body{overflow:auto}.layout{position:static;grid-template-columns:1fr}.stagewrap{height:420px;order:-1}}
+.side{border-right:1px solid var(--line);background:rgba(12,16,24,.74);backdrop-filter:blur(14px);overflow-y:auto;padding:22px 22px 28px}
+.progress{display:flex;gap:6px;margin-bottom:18px}
+.progress i{flex:1;height:3px;border-radius:2px;background:var(--line-2)}
+.progress i.on{background:var(--gold)}
+.k{font:600 11px var(--font);letter-spacing:2.2px;color:var(--gold);text-transform:uppercase}
+h1{font-family:var(--display);font-weight:400;font-size:32px;line-height:1.1;margin:6px 0 6px}
+.sub{color:var(--muted);margin:0 0 16px}
+label{display:block;font-size:12.5px;color:var(--muted);margin:12px 0 5px}
+input,select{width:100%;background:var(--bg-2);border:1px solid var(--line-2);border-radius:10px;padding:10px 12px;outline:none}
+input:focus,select:focus{border-color:var(--gold)}
+.row2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.opts{display:grid;gap:8px}
+.opt{display:flex;gap:12px;align-items:flex-start;text-align:left;border:1px solid var(--line-2);background:var(--bg-2);border-radius:12px;padding:12px 14px}
+.opt:hover{border-color:var(--gold)}
+.opt[aria-pressed="true"]{border-color:var(--gold);background:var(--gold-soft)}
+.opt b{display:block;font-weight:600}
+.opt span{font-size:12.5px;color:var(--muted)}
+.opt .ic{width:30px;height:30px;border-radius:8px;display:grid;place-items:center;flex:none;font-size:15px;background:var(--raise)}
+.toggle{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:10px 12px;border:1px solid var(--line-2);border-radius:12px;background:var(--bg-2);margin-bottom:8px}
+.toggle b{font-weight:600}
+.toggle span{display:block;font-size:12px;color:var(--muted)}
+.sw{width:42px;height:24px;border-radius:99px;background:var(--line-2);position:relative;flex:none;border:0}
+.sw::after{content:"";position:absolute;top:3px;left:3px;width:18px;height:18px;border-radius:50%;background:#fff;transition:.2s}
+.sw[aria-checked="true"]{background:var(--gold)}
+.sw[aria-checked="true"]::after{left:21px}
+.nav{display:flex;gap:10px;margin-top:20px}
+.btn{border:1px solid var(--line-2);background:var(--raise);border-radius:10px;padding:10px 16px;font-weight:600}
+.btn.primary{background:var(--gold);border-color:var(--gold);color:#1b1608;flex:1}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+.note{font-size:12px;color:var(--faint);margin-top:12px}
+.zone-h{font:600 11px var(--font);letter-spacing:1.6px;text-transform:uppercase;margin:18px 0 8px}
+.for{font:500 10px var(--mono);letter-spacing:.04em;color:var(--teal);background:var(--ai);padding:1px 7px;border-radius:99px;margin-left:6px;vertical-align:1px}
+.opt .n{margin-left:auto;align-self:center;font:500 11px var(--mono);color:var(--muted);white-space:nowrap}
+.chip{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:600;padding:3px 9px;border-radius:99px}
+.chip::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor}
+.c-ok{color:var(--green);background:rgba(130,217,159,.12)}
+.c-ai{color:var(--teal);background:var(--ai)}
+.c-warn{color:var(--warn);background:var(--warn-soft)}
+.devs{display:grid;gap:8px}
+.dev{display:grid;grid-template-columns:1fr auto auto;gap:10px;align-items:center;padding:10px 12px;border:1px solid var(--line-2);border-radius:12px;background:var(--bg-2)}
+.dev small{display:block;color:var(--muted);font-size:12px}
+.mini{border:1px solid var(--line-2);background:transparent;border-radius:8px;padding:5px 10px;font-size:12px;font-weight:600}
+.team{display:grid;gap:8px}
+.mem{display:grid;grid-template-columns:1fr 130px;gap:8px}
+.cmds{display:grid;gap:8px;margin-top:6px}
+.cmd{text-align:left;border:1px solid var(--line-2);background:var(--bg-2);border-radius:12px;padding:10px 12px;display:flex;gap:10px;align-items:center}
+.cmd:hover{border-color:var(--teal)}
+.cmd .ar{font-family:var(--ar)}
+.mic{display:flex;align-items:center;gap:10px;margin:14px 0 4px;padding:12px;border-radius:12px;background:var(--ai);border:1px solid rgba(92,207,181,.3)}
+.mic i{width:10px;height:10px;border-radius:50%;background:var(--teal);animation:pulse 1.4s infinite}
+@keyframes pulse{50%{opacity:.3}}
+.steps4{display:grid;gap:6px;margin-top:12px;font-size:13px}
+.steps4 div{display:flex;gap:8px;align-items:center;color:var(--faint)}
+.steps4 div.on{color:var(--ink)}
+.steps4 div.on b{color:var(--teal)}
+.approve{margin-top:12px;padding:12px;border-radius:12px;border:1px solid rgba(240,179,94,.4);background:var(--warn-soft)}
+.approve[hidden]{display:none}
+
+.stagewrap{position:relative;min-height:0}
+canvas#stage{width:100%;height:100%;display:block;cursor:grab}
+canvas#stage:active{cursor:grabbing}
+.hud{position:absolute;left:16px;top:14px;padding:10px 14px;border-radius:14px;background:linear-gradient(180deg,rgba(11,15,24,.82),rgba(11,15,24,.55));backdrop-filter:blur(6px);max-width:min(560px,calc(100% - 32px));pointer-events:none}
+.hud .k{display:flex;align-items:center;gap:8px}
+.hud .k .live{width:7px;height:7px;border-radius:50%;background:#ff6b6b;animation:pulse 1.6s infinite}
+.hud h2{font-family:var(--display);font-weight:400;font-size:28px;margin:4px 0 0}
+.hud p{margin:2px 0 0;color:var(--muted);font-size:13px}
+.caption{position:absolute;left:50%;transform:translateX(-50%);bottom:18px;padding:9px 16px;border-radius:12px;background:rgba(12,16,24,.8);border:1px solid var(--line);font-size:13px;white-space:nowrap;max-width:calc(100% - 32px);overflow:hidden;text-overflow:ellipsis}
+.caption b{color:var(--gold-2)}
+.hint{position:absolute;right:16px;bottom:18px;font-size:11.5px;color:var(--faint)}
+.verified{position:absolute;right:16px;top:14px;padding:8px 12px;border-radius:12px;background:rgba(130,217,159,.14);border:1px solid rgba(130,217,159,.4);color:var(--green);font-weight:600;font-size:13px;opacity:0;transition:.3s}
+.verified.show{opacity:1}
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="brand"><span class="word">Diwan</span><span class="tag">Create your account</span></div>
+  <span class="sample">Mockup · sample data</span>
+  <div class="mode" role="group" aria-label="Who is signing up">
+    <button id="m-office" aria-pressed="true">Office (company)</button>
+    <button id="m-user" aria-pressed="false">User (resident or staff)</button>
+  </div>
+</header>
+
+<div class="layout">
+  <aside class="side">
+    <div class="progress" id="progress"></div>
+    <div id="panel"></div>
+    <div class="nav">
+      <button class="btn" id="back">Back</button>
+      <button class="btn primary" id="next">Continue</button>
+    </div>
+  </aside>
+  <div class="stagewrap">
+    <canvas id="stage" aria-label="3D view"></canvas>
+    <div class="hud"><div class="k"><span class="live"></span><span id="hud-k">Your office, building itself</span></div><h2 id="hud-h">Sample Properties</h2><p id="hud-p">Each room you turn on appears here, with its agents.</p></div>
+    <div class="verified" id="verified">✓ Camera confirmed</div>
+    <div class="caption" id="caption">Drag to turn the view</div>
+    <div class="hint">Drag to rotate · scroll to zoom</div>
+  </div>
+</div>
+
+<script>
+(function(){
+const $ = s => document.querySelector(s);
+
+/* =========================================================
+   Tiny 3D renderer on canvas 2D (no libraries, works offline)
+   ========================================================= */
+const cv = $('#stage'), ctx = cv.getContext('2d');
+let W=0,H=0,DPR=1;
+function resize(){ const r=cv.getBoundingClientRect(); DPR=Math.min(2,window.devicePixelRatio||1); W=r.width; H=r.height; cv.width=W*DPR; cv.height=H*DPR; ctx.setTransform(DPR,0,0,DPR,0,0); }
+window.addEventListener('resize',resize);
+const cam={yaw:0.75,pitch:0.62,zoom:1,auto:true};
+let drag=null;
+cv.addEventListener('pointerdown',e=>{drag={x:e.clientX,yaw:cam.yaw};cam.auto=false;cv.setPointerCapture(e.pointerId);});
+cv.addEventListener('pointermove',e=>{ if(drag) cam.yaw=drag.yaw+(e.clientX-drag.x)*0.008; });
+cv.addEventListener('pointerup',()=>{drag=null;});
+cv.addEventListener('wheel',e=>{e.preventDefault();cam.zoom=Math.max(.6,Math.min(1.8,cam.zoom*(e.deltaY>0?.92:1.08)));},{passive:false});
+
+function proj(x,y,z){
+  const cy_=Math.cos(cam.yaw), sy=Math.sin(cam.yaw), cp=Math.cos(cam.pitch), sp=Math.sin(cam.pitch);
+  const xr=x*cy_-z*sy, zr=x*sy+z*cy_;
+  const yr=y*cp-zr*sp, zd=y*sp+zr*cp;
+  const s=Math.min(W,H)/(mode==='office'?27:20)*cam.zoom;
+  return {x:W/2+xr*s, y:H*0.58-yr*s, d:zd};
+}
+function hex(c){ const n=parseInt(c.slice(1),16); return [n>>16&255,n>>8&255,n&255]; }
+function shade(c,k,a){ const [r,g,b]=hex(c); return `rgba(${Math.round(r*k)},${Math.round(g*k)},${Math.round(b*k)},${a==null?1:a})`; }
+const LIGHT=[-0.4,0.8,0.45];
+let ambient=1;
+function boxFaces(o){
+  const {x,y,z,w,h,d,c,a,edge,glow}=o; if(h<=0.001) return [];
+  const v=[[x-w/2,y,z-d/2],[x+w/2,y,z-d/2],[x+w/2,y,z+d/2],[x-w/2,y,z+d/2],[x-w/2,y+h,z-d/2],[x+w/2,y+h,z-d/2],[x+w/2,y+h,z+d/2],[x-w/2,y+h,z+d/2]];
+  const F=[[4,5,6,7,[0,1,0]],[0,1,5,4,[0,0,-1]],[1,2,6,5,[1,0,0]],[2,3,7,6,[0,0,1]],[3,0,4,7,[-1,0,0]]];
+  const P=v.map(p=>proj(...p));
+  const cy_=Math.cos(cam.yaw), sy=Math.sin(cam.yaw);
+  const out=[];
+  for(const f of F){
+    const n=f[4];
+    // view direction test using rotated normal z
+    const nzr=n[0]*sy+n[2]*cy_, nyr=n[1];
+    const facing = n[1]===1 ? true : (nyr*Math.sin(cam.pitch)+nzr*Math.cos(cam.pitch))>-0.01;
+    if(!facing) continue;
+    const lam=Math.max(0,n[0]*LIGHT[0]+n[1]*LIGHT[1]+n[2]*LIGHT[2]);
+    const k=(0.42+0.58*lam)*(glow?1:ambient)*(o.k||1);
+    const pts=[P[f[0]],P[f[1]],P[f[2]],P[f[3]]];
+    out.push({t:'poly',pts,d:(pts[0].d+pts[1].d+pts[2].d+pts[3].d)/4+(o.bias||0),fill:shade(c,k,a),stroke:edge||null,top:n[1]===1,o});
+  }
+  return out;
+}
+function drawItems(items){
+  items.sort((a,b)=>a.d-b.d);
+  for(const it of items){
+    if(it.t==='poly'){
+      ctx.beginPath(); ctx.moveTo(it.pts[0].x,it.pts[0].y); for(let i=1;i<4;i++) ctx.lineTo(it.pts[i].x,it.pts[i].y); ctx.closePath();
+      ctx.fillStyle=it.fill; ctx.fill();
+      if(it.stroke){ ctx.strokeStyle=it.stroke; ctx.lineWidth=1; ctx.stroke(); }
+      if(it.top && it.o.screenText){ const c=centroid(it.pts); ctx.fillStyle=it.o.screenColor||'#fff'; ctx.font='600 11px Inter, sans-serif'; ctx.textAlign='center'; ctx.fillText(it.o.screenText,c.x,c.y+4); }
+      if(it.o.faceText && !it.top && it.o.faceTextSide===it.side){}
+    } else if(it.t==='dot'){
+      ctx.beginPath(); ctx.arc(it.p.x,it.p.y,it.r,0,Math.PI*2); ctx.fillStyle=it.c; ctx.fill();
+      if(it.glow){ ctx.beginPath(); ctx.arc(it.p.x,it.p.y,it.r*2.4,0,Math.PI*2); ctx.fillStyle=it.glow; ctx.fill(); }
+    } else if(it.t==='label'){
+      ctx.font=it.f||'600 12px Inter, sans-serif'; ctx.textAlign='center';
+      const w=ctx.measureText(it.s).width+14;
+      ctx.fillStyle='rgba(10,13,19,.78)'; roundRect(it.p.x-w/2,it.p.y-15,w,20,6); ctx.fill();
+      ctx.strokeStyle=it.c||'rgba(232,199,122,.6)'; ctx.lineWidth=1; ctx.stroke();
+      ctx.fillStyle=it.tc||'#ece8df'; ctx.fillText(it.s,it.p.x,it.p.y-1);
+    } else if(it.t==='line'){
+      ctx.beginPath(); ctx.moveTo(it.a.x,it.a.y); ctx.lineTo(it.b.x,it.b.y); ctx.strokeStyle=it.c; ctx.lineWidth=it.w||1; if(it.dash) ctx.setLineDash(it.dash); ctx.stroke(); ctx.setLineDash([]);
+    } else if(it.t==='face'){ // a vertical quad with text, for screens
+      ctx.beginPath(); ctx.moveTo(it.pts[0].x,it.pts[0].y); for(let i=1;i<4;i++) ctx.lineTo(it.pts[i].x,it.pts[i].y); ctx.closePath();
+      ctx.fillStyle=it.fill; ctx.fill(); ctx.strokeStyle=it.stroke; ctx.stroke();
+      if(it.lines){ const c=centroid(it.pts); ctx.textAlign='center'; it.lines.forEach((l,i)=>{ ctx.font=l[1]; ctx.fillStyle=l[2]; ctx.fillText(l[0],c.x,c.y-10+i*16); }); }
+    }
+  }
+}
+function centroid(p){ return {x:(p[0].x+p[1].x+p[2].x+p[3].x)/4, y:(p[0].y+p[1].y+p[2].y+p[3].y)/4}; }
+function roundRect(x,y,w,h,r){ ctx.beginPath(); ctx.moveTo(x+r,y); ctx.arcTo(x+w,y,x+w,y+h,r); ctx.arcTo(x+w,y+h,x,y+h,r); ctx.arcTo(x,y+h,x,y,r); ctx.arcTo(x,y,x+w,y,r); ctx.closePath(); }
+const ease=(a,b,t)=>a+(b-a)*Math.min(1,t);
+
+/* =========================================================
+   OFFICE scene: five areas around one shared record.
+   Every room is always there as a faint tile; the rooms an
+   office uses rise and light up, so no office looks empty.
+   ========================================================= */
+const ZONES=[
+  {key:'today',name:'Today',c:'#e8c77a',x:0,z:-8.2,cols:3},
+  {key:'clients',name:'Clients',c:'#7ea6f8',x:-8.4,z:-1.2,cols:1},
+  {key:'deals',name:'Deals',c:'#f0b35e',x:-6.2,z:6.6,cols:2},
+  {key:'buildings',name:'Buildings',c:'#5ccfb5',x:8.2,z:-0.6,cols:2},
+  {key:'back',name:'Back office',c:'#b591f3',x:3.4,z:8.4,cols:4}];
+const ZONE=Object.fromEntries(ZONES.map(z=>[z.key,z]));
+const ROOMS=[
+  ['desk','Front Desk','today','Owner assistant and WhatsApp front desk'],
+  ['approvals','Approvals','today','Everything waiting for a person to decide'],
+  ['meetings','Meetings','today','Recorded with consent; what was said becomes facts'],
+  ['leads','Leads','clients','New enquiries, qualified and followed up'],
+  ['residents','Residents','clients','Fault reports by voice or WhatsApp'],
+  ['patients','Patients','clients','Bookings and patient messages'],
+  ['deals','Deals','deals','Sales, off-plan and rentals'],
+  ['listings','Listings','deals','Listings and marketing posts'],
+  ['signing','Signing & DLD','deals','Forms A, B and I and DLD paperwork, signed online'],
+  ['leasing','Leasing & Ejari','deals','Leases, renewals and Ejari risk'],
+  ['buildings','Buildings','buildings','Every building, its age and its Law 3 deadline'],
+  ['site','Site Witness','buildings','Phone walks checked against the rulebook'],
+  ['review','Review & Sign','buildings','The engineer accepts, edits or overturns each finding'],
+  ['verify','Fix Verify','buildings','A fix closes only when the camera sees it'],
+  ['fixjobs','Fix jobs','buildings','Fix jobs with an owner, a deadline and a cost'],
+  ['dha','DHA checks','buildings','Weekly DHA self-inspection walks'],
+  ['devices','Devices','buildings','Screens, AC and lights by voice, checked on camera'],
+  ['finance','Finance','back','Invoices with TRN and VAT, payments'],
+  ['compliance','Compliance','back','Screening, goAML and bank-change alerts'],
+  ['records','Records','back','One event log; facts are never edited'],
+  ['reports','Reports & Export','back','Signed reports and evidence packs, ready to upload'],
+  ['contractors','Contractors','back','Contractors, quotes and verified payments'],
+  ['medicines','Medicines','back','Stock and expiry dates'],
+  ['rota','Staff rota','back','Shifts and licences']
+].map(([key,name,zone,desc])=>({key,name,zone,desc,h:0.08,on:false}));
+ZONES.forEach(zn=>{
+  const rs=ROOMS.filter(r=>r.zone===zn.key), rows=Math.ceil(rs.length/zn.cols), G=2.7;
+  zn.w=zn.cols*G+0.6; zn.d=rows*G+0.6;
+  rs.forEach((r,i)=>{ const col=i%zn.cols, row=Math.floor(i/zn.cols);
+    r.x=zn.x+(col-(zn.cols-1)/2)*G; r.z=zn.z+(row-(rows-1)/2)*G; });
+});
+const CORE=['desk','approvals','finance','compliance','records'];
+const PRESETS={
+  brokerage:[...CORE,'leads','deals','listings','signing','meetings'],
+  pm:[...CORE,'buildings','fixjobs','residents','leasing','contractors','devices'],
+  eng:[...CORE,'site','review','verify','reports','contractors'],
+  clinic:[...CORE,'patients','dha','medicines','devices','rota']};
+const TYPE_NAME={brokerage:'brokerage',pm:'property management',eng:'engineering',clinic:'clinic'};
+const agents=[]; ROOMS.forEach((r,i)=>{ for(let k=0;k<2;k++) agents.push({r:i, t:Math.random(), sp:0.1+Math.random()*0.14, out:Math.random()<.5}); });
+
+function officeItems(time){
+  const it=[];
+  it.push(...boxFaces({x:0,y:-0.3,z:0.5,w:24,h:0.3,d:24,c:'#141a26',edge:'rgba(255,255,255,.05)',bias:-100}));
+  // floor grid
+  for(let g=-12;g<=12;g+=1.5){ it.push({t:'line',a:proj(g,0.01,-11.5),b:proj(g,0.01,12.5),c:'rgba(255,255,255,.03)',d:-99}); it.push({t:'line',a:proj(-12,0.01,g+0.5),b:proj(12,0.01,g+0.5),c:'rgba(255,255,255,.03)',d:-99}); }
+  // the five areas, as tinted pads with their names
+  for(const zn of ZONES){
+    it.push(...boxFaces({x:zn.x,y:0,z:zn.z,w:zn.w,h:0.03,d:zn.d,c:zn.c,a:0.08,edge:shade(zn.c,1,.3),bias:-90}));
+    it.push({t:'label',p:proj(zn.x,0.05,zn.z+zn.d/2+0.7),s:zn.name.toUpperCase(),c:shade(zn.c,1,.45),tc:zn.c,d:500,f:'600 10.5px Inter, sans-serif'});
+  }
+  // spine (one event log)
+  const pulse=0.75+0.25*Math.sin(time*2);
+  it.push(...boxFaces({x:0,y:0,z:0,w:0.9,h:3.4,d:0.9,c:'#5ccfb5',a:0.85,glow:true,k:pulse,edge:'rgba(92,207,181,.7)'}));
+  it.push({t:'label',p:proj(0,3.9,0),s:'One shared record',c:'rgba(92,207,181,.7)',d:50});
+  for(const r of ROOMS){
+    const c=ZONE[r.zone].c;
+    r.h=ease(r.h,r.on?1.1:0.08,0.08);
+    const lit=r.h>0.35;
+    if(r.on) it.push({t:'line',a:proj(0,0.02,0),b:proj(r.x,0.02,r.z),c:shade(c,1,0.28),dash:[4,4],d:-98});
+    it.push(...boxFaces({x:r.x,y:0,z:r.z,w:1.8,h:r.h,d:1.8,c,a:lit?0.9:0.2,edge:shade(c,1.1,lit?0.9:0.3)}));
+    if(lit){
+      // desk + screen inside top
+      it.push(...boxFaces({x:r.x,y:r.h,z:r.z,w:0.9,h:0.1*r.h,d:0.45,c:'#0f131c',edge:shade(c,1,.6)}));
+      it.push({t:'label',p:proj(r.x,r.h+0.9,r.z),s:r.name,c:shade(c,1,.75),d:60,f:'600 11px Inter, sans-serif'});
+    }
+  }
+  // agents walking between the record and rooms
+  for(const a of agents){
+    const r=ROOMS[a.r]; if(r.h<0.6) continue;
+    a.t+=a.sp*0.016; if(a.t>1){a.t=0;a.out=!a.out;}
+    const tt=a.out?a.t:1-a.t;
+    const x=r.x*tt, z=r.z*tt, y=0.25+Math.sin(tt*Math.PI)*0.6;
+    const p=proj(x,y,z);
+    const zc=ZONE[r.zone].c;
+    it.push({t:'dot',p,r:2.8,c:zc,glow:shade(zc,1,.18),d:p.d});
+  }
+  return it;
+}
+
+/* =========================================================
+   USER scene: a room with screen, AC, lights and a camera
+   ========================================================= */
+const U={screen:0, screenText:null, ac:0, acSet:24, light:1, lightTarget:1, verify:0, sent:false, particles:[]};
+function userItems(time){
+  const it=[];
+  U.light=ease(U.light,U.lightTarget,0.05);
+  ambient=0.55+0.45*U.light;
+  it.push(...boxFaces({x:0,y:-0.3,z:0,w:12,h:0.3,d:10,c:'#1b2130',bias:-100}));
+  for(let g=-5;g<=5;g+=1) it.push({t:'line',a:proj(-6,0.01,g),b:proj(6,0.01,g),c:'rgba(255,255,255,.04)',d:-99});
+  // back wall (z=-5) and left wall (x=-6)
+  it.push(...boxFaces({x:0,y:0,z:-5.1,w:12,h:5,d:0.2,c:'#222a3a',bias:-60}));
+  it.push(...boxFaces({x:-6.1,y:0,z:0,w:0.2,h:5,d:10,c:'#1e2534',bias:-60}));
+  // table and chairs
+  it.push(...boxFaces({x:0.5,y:0,z:0.4,w:4.2,h:1.0,d:2.0,c:'#3a3326',edge:'rgba(232,199,122,.25)'}));
+  [[-1.2,1.9],[0.5,1.9],[2.2,1.9],[-1.2,-1.1],[2.2,-1.1]].forEach(([x,z])=>it.push(...boxFaces({x,y:0,z,w:0.8,h:0.7,d:0.8,c:'#2b3346'})));
+  // person standing, speaking
+  it.push(...boxFaces({x:3.8,y:0,z:1.8,w:0.6,h:1.7,d:0.45,c:'#7ea6f8'}));
+  const hp=proj(3.8,2.05,1.8); it.push({t:'dot',p:hp,r:7,c:'#e8d3b0',d:hp.d+0.1});
+  if(U.talk>0){ U.talk-=0.01; it.push({t:'label',p:proj(3.8,3.1,1.8),s:U.say,c:'rgba(126,166,248,.7)',d:80,f:'500 12px Inter, sans-serif'}); }
+  // TV on back wall: draw as a face quad facing +z
+  const tv=[proj(-2.2,1.4,-4.98),proj(1.8,1.4,-4.98),proj(1.8,3.6,-4.98),proj(-2.2,3.6,-4.98)];
+  U.screen=ease(U.screen,U.screenText?1:0,0.06);
+  const glow=U.screen;
+  it.push({t:'face',pts:[tv[0],tv[1],tv[2],tv[3]],d:-40,fill:glow>0.05?`rgba(${Math.round(20+40*glow)},${Math.round(30+60*glow)},${Math.round(45+70*glow)},1)`:'#07090d',stroke:'rgba(255,255,255,.2)',
+    lines: glow>0.5&&U.screenText ? [[U.screenText[0],'600 13px Inter, sans-serif','#f6e2ae'],[U.screenText[1],'500 11px Inter, sans-serif','#cfd6e4']] : null});
+  // AC unit on left wall
+  it.push(...boxFaces({x:-5.75,y:3.6,z:-1.5,w:0.5,h:0.7,d:2.4,c:'#e6e8ee',bias:-30}));
+  const acp=proj(-5.4,4.5,-1.5); it.push({t:'label',p:acp,s:U.ac?`AC ${U.acSet}°`:'AC',c:U.ac?'rgba(92,207,181,.8)':'rgba(255,255,255,.25)',d:70,f:'600 11px Inter, sans-serif'});
+  if(U.ac){
+    if(Math.random()<0.5) U.particles.push({x:-5.4,y:3.5,z:-1.5+(Math.random()-.5)*2,vx:0.03+Math.random()*0.02,vy:-0.012,life:1});
+  }
+  U.particles=U.particles.filter(p=>p.life>0);
+  for(const p of U.particles){ p.x+=p.vx; p.y+=p.vy; p.life-=0.012; const q=proj(p.x,p.y,p.z); it.push({t:'dot',p:q,r:2,c:`rgba(126,200,255,${p.life*0.8})`,d:q.d}); }
+  // ceiling lights (drawn as bright discs)
+  [[-2,-1.5],[2,-1.5],[-2,2],[2,2]].forEach(([x,z])=>{ const q=proj(x,4.9,z); it.push({t:'dot',p:q,r:6,c:`rgba(255,240,200,${0.25+0.75*U.light})`,glow:`rgba(255,230,170,${0.12*U.light})`,d:q.d}); });
+  // room camera in the corner, with view lines when verifying
+  it.push(...boxFaces({x:5.6,y:4.4,z:-4.7,w:0.4,h:0.3,d:0.4,c:'#5ccfb5',glow:true}));
+  if(U.verify>0){ U.verify-=0.008; const c=proj(5.6,4.5,-4.7); const a=U.verify;
+    [[-2.2,1.4,-4.98],[1.8,1.4,-4.98],[1.8,3.6,-4.98],[-2.2,3.6,-4.98]].forEach(v=>it.push({t:'line',a:c,b:proj(...v),c:`rgba(130,217,159,${a})`,w:1.4,d:90}));
+  }
+  it.push({t:'label',p:proj(5.6,5.1,-4.7),s:'Room camera',c:'rgba(92,207,181,.6)',d:85,f:'500 11px Inter, sans-serif'});
+  return it;
+}
+
+let mode='office';
+function frame(t){
+  const time=t/1000;
+  if(cam.auto) cam.yaw+=0.0016;
+  ctx.clearRect(0,0,W,H);
+  ambient=1;
+  drawItems(mode==='office'?officeItems(time):userItems(time));
+  requestAnimationFrame(frame);
+}
+
+/* =========================================================
+   Sign-up flows
+   ========================================================= */
+const S={ type:null, company:'Sample Properties', rooms:{},
+  team:[['Layla Mansour','Owner'],['Omar Khan','Broker'],['Priya Shah','Compliance']], consent:true, uae:true, wa:true,
+  uLang:'English and Arabic', voice:false, devs:{tv:'found',ac:'found',lights:'found'} };
+
+const OFFICE_STEPS=[
+  ()=>`<div class="k">Step 1 of 5</div><h1>What kind of office are you?</h1><p class="sub">Diwan sets up the right rooms and rules for you.</p>
+    <div class="opts">${[
+      ['brokerage','🏢','Real-estate brokerage','Deals, DLD forms, commissions, AML'],
+      ['pm','🏘️','Property manager or owners’ association','Buildings, maintenance, Law 3 certificates'],
+      ['eng','📐','Licensed engineering office','Site Witness walks and signed Law 3 reports'],
+      ['clinic','🩺','Clinic','Patient messages and DHA self-inspections']].map(([k,ic,b,s])=>`<button class="opt" data-type="${k}" aria-pressed="${S.type===k}"><span class="ic">${ic}</span><span><b>${b}</b><span>${s}</span></span><span class="n">${PRESETS[k].length} rooms</span></button>`).join('')}</div>`,
+  ()=>`<div class="k">Step 2 of 5</div><h1>Your company</h1><p class="sub">Used on invoices, reports and filings.</p>
+    <label>Company name</label><input id="f-company" value="${S.company}">
+    <div class="row2"><div><label>Emirate</label><select><option>Dubai</option><option>Abu Dhabi</option><option>Sharjah</option></select></div><div><label>Trade licence no.</label><input placeholder="e.g. 123456 (sample)"></div></div>
+    <div class="row2"><div><label>${S.type==='eng'?'DM consultant registration':'RERA / ORN no.'}</label><input placeholder="sample"></div><div><label>TRN (VAT)</label><input placeholder="100 0000 0000 0003"></div></div>
+    <p class="note">Checked against the licence you upload; nothing here is shared outside your office.</p>`,
+  ()=>`<div class="k">Step 3 of 5</div><h1>Choose your rooms</h1><p class="sub">Your ${TYPE_NAME[S.type]||''} office starts with <b id="rc">${roomCount()}</b> rooms, set out in five areas. Each room is a team of agents. Turn any room on or off and watch the office change.</p>
+    ${ZONES.map(zn=>`<div class="zone-h" style="color:${zn.c}">${zn.name}</div>`+ROOMS.filter(r=>r.zone===zn.key).map(r=>`<div class="toggle"><div><b>${r.name}${S.type&&PRESETS[S.type].includes(r.key)?'<span class="for">for you</span>':''}</b><span>${r.desc}</span></div><button class="sw" role="switch" data-room="${r.key}" aria-checked="${!!S.rooms[r.key]}" aria-label="${r.name}"></button></div>`).join('')).join('')}`,
+  ()=>`<div class="k">Step 4 of 5</div><h1>Invite your team</h1><p class="sub">Everyone sees only what their role allows.</p>
+    <div class="team">${S.team.map(([n,r])=>`<div class="mem"><input value="${n}"><select>${['Owner','Broker','Compliance','Finance','Engineer','Marketing'].map(o=>`<option ${o===r?'selected':''}>${o}</option>`).join('')}</select></div>`).join('')}</div>
+    <button class="mini" id="add-mem" style="margin-top:10px">+ Add person</button>
+    <p class="note">Compliance reasons stay visible to Compliance only.</p>`,
+  ()=>`<div class="k">Step 5 of 5</div><h1>Connect and agree</h1><p class="sub">You can change these later in Settings.</p>
+    <div class="toggle"><div><b>WhatsApp Business</b><span>Rania answers new clients from your listings</span></div><button class="sw" role="switch" data-flag="wa" aria-checked="${S.wa}"></button></div>
+    <div class="toggle"><div><b>Ask before recording meetings</b><span>Every meeting starts with the client's consent</span></div><button class="sw" role="switch" data-flag="consent" aria-checked="${S.consent}"></button></div>
+    <div class="toggle"><div><b>Keep data in the UAE</b><span>Recordings and records stored in-country</span></div><button class="sw" role="switch" data-flag="uae" aria-checked="${S.uae}"></button></div>
+    <div class="toggle"><div><b>People approve money, signatures and filings</b><span>Agents can never pay, sign or submit on their own</span></div><span class="chip c-ok">Always on</span></div>`,
+  ()=>`<div class="k">Ready</div><h1>Your office is open</h1><p class="sub">${Object.values(S.rooms).filter(Boolean).length} rooms, ${S.team.length} people. Agents start with today's WhatsApp messages and your listings.</p>
+    <div class="steps4"><div class="on"><b>✓</b> Rooms built</div><div class="on"><b>✓</b> Team invited</div><div class="on"><b>✓</b> Consent and data rules set</div><div class="on"><b>→</b> Next: connect a meeting room in User mode</div></div>
+    <p class="note">In the real product this opens office3d.html, the live 3D office you already have.</p>`
+];
+const USER_STEPS=[
+  ()=>`<div class="k">Step 1 of 4</div><h1>Join your building or office</h1><p class="sub">Your property manager or company sends you an invite code.</p>
+    <label>Invite code</label><input id="f-code" value="ALNOOR-504">
+    <div class="opts" style="margin-top:12px"><div class="opt" aria-pressed="true"><span class="ic">🏠</span><span><b>Al Noor Residence · Flat 504</b><span>Managed by Sample Properties (sample)</span></span></div></div>
+    <p class="note">The building pays for this; residents and staff use it free.</p>`,
+  ()=>`<div class="k">Step 2 of 4</div><h1>Language and voice</h1><p class="sub">Speak in Arabic, English or both in one sentence.</p>
+    <label>Language</label><select id="f-lang"><option>English and Arabic</option><option>English</option><option>العربية</option></select>
+    <div class="toggle" style="margin-top:12px"><div><b>Learn my voice</b><span>So the assistant only acts on you, not on anyone else in the room</span></div><button class="sw" role="switch" data-flag="voice" aria-checked="${S.voice}"></button></div>
+    ${S.voice?`<div class="mic"><i></i><span>Say: <b>“Diwan, turn on the screen”</b> · 2 of 3 samples</span></div>`:''}`,
+  ()=>`<div class="k">Step 3 of 4</div><h1>Point at your devices</h1><p class="sub">Point your phone at each device. Diwan finds how to control it, tests it, and the camera checks it worked.</p>
+    <div class="devs">${[['tv','Screen','Infrared code found · Samsung (sample)'],['ac','Air conditioner','Wi-Fi unit found'],['lights','Ceiling lights','Smart switch found']].map(([k,n,s])=>`<div class="dev"><div><b>${n}</b><small>${s}</small></div><span class="chip ${S.devs[k]==='ok'?'c-ok':'c-ai'}">${S.devs[k]==='ok'?'Tested ✓':'Found'}</span><button class="mini" data-test="${k}" ${S.devs[k]==='ok'?'disabled':''}>Test</button></div>`).join('')}</div>
+    <p class="note">Nothing physical changes without your OK the first time.</p>`,
+  ()=>`<div class="k">Step 4 of 4 · Try it</div><h1>Just say it</h1><p class="sub">Tap a command, as if you said it out loud.</p>
+    <div class="cmds">
+      <button class="cmd" data-cmd="slides">🎙 “Open the Al Noor project slides”</button>
+      <button class="cmd" data-cmd="cool">🎙 “Make it cooler, 22 degrees”</button>
+      <button class="cmd" data-cmd="dim">🎙 “Lights to 30 percent”</button>
+      <button class="cmd" data-cmd="ar"><span>🎙</span><span class="ar">“شغّل الشاشة”</span><span class="muted" style="font-size:12px;color:var(--muted)">(turn on the screen)</span></button>
+      <button class="cmd" data-cmd="send">🎙 “Send the safety report to the client”</button>
+    </div>
+    <div class="steps4" id="flow"></div>
+    <div class="approve" id="approve" hidden><b>Needs your approval</b><div style="font-size:13px;color:var(--muted);margin:4px 0 10px">Send “Al Noor Law 3 report.pdf” to client Karim H. (sample) by email?</div><button class="btn primary" id="ok-send" style="width:100%">Approve and send</button></div>`
+];
+
+function applyType(t){ S.type=t; S.rooms=Object.fromEntries(ROOMS.map(r=>[r.key,PRESETS[t].includes(r.key)])); }
+function roomCount(){ return Object.values(S.rooms).filter(Boolean).length; }
+
+let step=0;
+function steps(){ return mode==='office'?OFFICE_STEPS:USER_STEPS; }
+function render(){
+  const st=steps(); step=Math.max(0,Math.min(step,st.length-1));
+  $('#panel').innerHTML=st[step]();
+  $('#progress').innerHTML=st.map((_,i)=>`<i class="${i<=step?'on':''}"></i>`).join('');
+  $('#back').disabled=step===0;
+  const last=step===st.length-1;
+  $('#next').textContent= last ? (mode==='office'?'Open my office':'Done') : 'Continue';
+  $('#next').disabled = mode==='office' && step===0 && !S.type;
+  bind();
+  syncScene();
+}
+function bind(){
+  document.querySelectorAll('[data-type]').forEach(b=>b.onclick=()=>{ applyType(b.dataset.type); render();
+    caption(`<b>${roomCount()} rooms</b> set up for a ${TYPE_NAME[S.type]} office · faint tiles are rooms you can add later`); });
+  document.querySelectorAll('[data-room]').forEach(b=>b.onclick=()=>{ const k=b.dataset.room; S.rooms[k]=!S.rooms[k]; b.setAttribute('aria-checked',S.rooms[k]); const rc=$('#rc'); if(rc) rc.textContent=roomCount(); syncScene(); caption(S.rooms[k]?`<b>${ROOMS.find(r=>r.key===k).name}</b> added · its agents start walking to the shared record`:`${ROOMS.find(r=>r.key===k).name} removed`); });
+  document.querySelectorAll('[data-flag]').forEach(b=>b.onclick=()=>{ const k=b.dataset.flag; S[k]=!S[k]; render(); });
+  const fc=$('#f-company'); if(fc) fc.oninput=()=>{ S.company=fc.value; $('#hud-h').textContent=fc.value||'Your office'; };
+  const am=$('#add-mem'); if(am) am.onclick=()=>{ S.team.push(['New person','Broker']); render(); };
+  document.querySelectorAll('[data-test]').forEach(b=>b.onclick=()=>{ const k=b.dataset.test; S.devs[k]='ok';
+    if(k==='tv'){ U.screenText=['Test picture','Screen responds']; setTimeout(()=>U.screenText=null,1800); }
+    if(k==='ac'){ U.ac=1; setTimeout(()=>U.ac=0,1800); }
+    if(k==='lights'){ U.lightTarget=.4; setTimeout(()=>U.lightTarget=1,1200); }
+    U.verify=1; flashVerified(); caption(`<b>Tested.</b> Command sent, and the room camera saw it work`); render(); });
+  document.querySelectorAll('[data-cmd]').forEach(b=>b.onclick=()=>runCmd(b.dataset.cmd));
+  const ok=$('#ok-send'); if(ok) ok.onclick=()=>{ $('#approve').hidden=true; U.sent=true; showFlow(['Heard','Found the signed report','Approved by you','Sent · logged in Records'],4); caption('<b>Sent</b> after your approval · logged in Records'); };
+}
+function caption(h){ $('#caption').innerHTML=h; }
+function flashVerified(){ const v=$('#verified'); v.classList.add('show'); clearTimeout(v._t); v._t=setTimeout(()=>v.classList.remove('show'),2400); }
+function showFlow(labels,n){
+  $('#flow').innerHTML=labels.map((l,i)=>`<div class="${i<n?'on':''}"><b>${i<n?'✓':'·'}</b> ${l}</div>`).join('');
+}
+function runCmd(c){
+  $('#approve').hidden=true;
+  const say={slides:'Open the Al Noor project slides',cool:'Make it cooler, 22 degrees',dim:'Lights to 30 percent',ar:'شغّل الشاشة',send:'Send the safety report to the client'}[c];
+  U.say='“'+say+'”'; U.talk=1.6;
+  const labels={slides:['Heard you (voice matched)','Found “Al Noor · Law 3 report” in Diwan','Screen on, deck opened at slide 1','Room camera confirmed the slide is showing'],
+    cool:['Heard you (voice matched)','Air conditioner found','Set to 22°','Display reads 22°, confirmed'],
+    dim:['Heard you (voice matched)','Ceiling lights found','Set to 30%','Camera saw the room dim'],
+    ar:['سمعتك (Arabic understood)','Screen found','Screen on','Camera confirmed'],
+    send:['Heard you (voice matched)','Found the signed report','Waiting for your approval','—']}[c];
+  showFlow(labels,1);
+  let i=1; const tick=setInterval(()=>{ i++; showFlow(labels, c==='send'?Math.min(i,2):i);
+    if(i===3){
+      if(c==='slides'){ U.screenText=['Al Noor Residence · Law 3 report','Slide 1 of 12 · signed 14 Nov 2026']; }
+      if(c==='ar'){ U.screenText=['الشاشة تعمل','Screen on']; }
+      if(c==='cool'){ U.ac=1; U.acSet=22; }
+      if(c==='dim'){ U.lightTarget=.3; }
+      if(c==='send'){ $('#approve').hidden=false; caption('<b>Sensitive action:</b> sending a file needs your tap'); }
+    }
+    if(i>=4){ clearInterval(tick); if(c!=='send'){ U.verify=1; flashVerified(); caption(`<b>Done and checked.</b> ${labels[3]}`); } }
+  },650);
+}
+function syncScene(){
+  if(mode==='office'){
+    ROOMS.forEach(r=>r.on=!!S.rooms[r.key]);
+    $('#hud-k').textContent='Your office, building itself';
+    $('#hud-h').textContent=S.company||'Your office';
+    $('#hud-p').textContent= step>=5 ? 'Open. Agents are moving work between rooms through one shared record.'
+      : S.type ? `${roomCount()} rooms lit across five areas. Faint tiles are rooms you can add later.`
+      : 'Five areas around one shared record. Pick your office type and its rooms light up.';
+  } else {
+    $('#hud-k').textContent='Your space, controlled by voice';
+    $('#hud-h').textContent= step===0?'Al Noor Residence · Flat 504':'Meeting room or home';
+    $('#hud-p').textContent='Say it in Arabic or English. Diwan acts, then the room camera checks it really happened.';
+  }
+}
+function setMode(m){
+  mode=m; step=0; cam.auto=true; cam.yaw=m==='office'?0.75:0.55;
+  $('#m-office').setAttribute('aria-pressed',m==='office'); $('#m-user').setAttribute('aria-pressed',m==='user');
+  caption(m==='office'?'Pick your office type to start':'Join with the code your building or company sent you');
+  render();
+}
+$('#m-office').onclick=()=>setMode('office');
+$('#m-user').onclick=()=>setMode('user');
+$('#next').onclick=()=>{ const st=steps(); if(step<st.length-1){ step++; render(); if(mode==='office'&&step===5) caption('<b>Your office is open.</b> Agents start work.'); } else { caption(mode==='office'?'This is where office3d.html would open':'All set · your devices answer to your voice'); } };
+$('#back').onclick=()=>{ step--; render(); };
+
+// #brokerage, #pm, #eng or #clinic in the address opens with that office type picked (for demos)
+const pick=location.hash.slice(1); if(PRESETS[pick]) applyType(pick);
+resize(); render(); requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
