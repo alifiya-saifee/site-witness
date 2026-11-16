@@ -110,7 +110,15 @@ let session=store.get('sw-session')||'', person=store.get('sw-person')||'layla',
 const EXAMPLES=['open the Al Noor slides','open the report','send the Al Noor report to Karim','open the clinic report','افتح عرض النور'];
 
 async function api(path,opts={}){
-  const r=await fetch(path,{...opts,headers:{'Content-Type':'application/json','X-Session':session,...(opts.headers||{})}});
+  let r;
+  const send=()=>fetch(path,{...opts,headers:{'Content-Type':'application/json','X-Session':session,...(opts.headers||{})}});
+  try{ r=await send(); }
+  catch(e){
+    // phones on Wi-Fi + mobile data sometimes drop one request: try once more before giving up
+    await new Promise(res=>setTimeout(res,900));
+    try{ r=await send(); }
+    catch(e2){ throw new Error('Can’t reach the Mac. Check that ./run-demo is running and your phone is on the same Wi-Fi (turn mobile data off while testing), then try again.'); }
+  }
   const body=await r.json().catch(()=>({}));
   if(!r.ok) throw Object.assign(new Error(body.detail||r.statusText),{status:r.status});
   return body;
@@ -141,23 +149,42 @@ function drawChips(){
   $('#chips').innerHTML=EXAMPLES.map(t=>`<button type="button">${esc(t)}</button>`).join('');
   $('#chips').querySelectorAll('button').forEach((b,i)=>b.onclick=()=>{ $('#said').value=EXAMPLES[i]; go(EXAMPLES[i]); });
 }
+/* The mic: the page records a short clip and the Mac writes it down with Whisper (no browser speech service).
+   Tap 🎙, speak, tap again (or it stops by itself after 8 seconds). */
 function setupMic(){
-  const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
-  if(!SR || !window.isSecureContext){
+  const hint=t=>$('#michint').textContent=t;
+  if(!window.isSecureContext || !navigator.mediaDevices || !window.MediaRecorder){
     $('#mic').disabled=true;
-    $('#michint').textContent='On the phone, tap the mic on your keyboard to dictate. (The page’s own mic only works on the Mac at localhost: browsers block it on plain http over Wi-Fi.)';
+    hint(location.protocol==='http:' ? 'For the mic, open the https link shown in the terminal on the Mac (browsers only allow a mic on secure pages).' : 'This browser can’t record audio. Type the command instead.');
     return;
   }
-  $('#michint').textContent='Tap 🎙 and speak in English or Arabic.';
-  let rec=null;
-  $('#mic').onclick=()=>{
-    if(rec){ rec.stop(); return; }
-    rec=new SR(); rec.lang=/[؀-ۿ]/.test($('#said').value)?'ar-AE':'en-US'; rec.interimResults=true;
-    $('#mic').setAttribute('aria-pressed','true');
-    rec.onresult=e=>{ const r=e.results[e.results.length-1]; $('#said').value=r[0].transcript; if(r.isFinal) go(r[0].transcript); };
-    rec.onend=()=>{ rec=null; $('#mic').setAttribute('aria-pressed','false'); };
-    rec.onerror=e=>{ $('#michint').textContent='Mic: '+e.error; };
-    rec.start();
+  hint('Tap 🎙, speak in English or Arabic, then tap again. The Mac writes it down.');
+  let rec=null, chunks=[], stream=null, timer=null;
+  const stop=()=>{ clearTimeout(timer); if(rec && rec.state==='recording') rec.stop(); };
+  $('#mic').onclick=async()=>{
+    if(rec){ stop(); return; }
+    try{ stream=await navigator.mediaDevices.getUserMedia({audio:true}); }
+    catch(e){ hint('The mic is blocked. Allow the microphone for this page in the browser settings, then try again.'); return; }
+    const type=['audio/webm','audio/mp4','audio/ogg'].find(t=>MediaRecorder.isTypeSupported(t))||'';
+    rec=new MediaRecorder(stream, type?{mimeType:type}:{}); chunks=[];
+    rec.ondataavailable=e=>{ if(e.data.size) chunks.push(e.data); };
+    rec.onstop=async()=>{
+      stream.getTracks().forEach(t=>t.stop()); $('#mic').setAttribute('aria-pressed','false');
+      const kind=(rec.mimeType||type||'audio/webm').split(';')[0]; rec=null;
+      const blob=new Blob(chunks,{type:kind});
+      if(blob.size<1500){ hint('I didn’t hear anything. Tap 🎙 and speak a bit longer.'); return; }
+      hint('Writing down what you said…'); $('#said').value='';
+      try{
+        const r=await fetch('/api/transcribe',{method:'POST',headers:{'Content-Type':kind,'X-Session':session},body:blob});
+        const d=await r.json().catch(()=>({}));
+        if(!r.ok) throw new Error(d.detail||r.statusText);
+        if(!d.text){ hint('I couldn’t make out any words. Try again, a little closer to the mic.'); return; }
+        hint(`Heard (${d.language==='ar'?'Arabic':d.language==='en'?'English':d.language}). Tap 🎙 to speak again.`);
+        $('#said').value=d.text; go(d.text);
+      }catch(e){ hint('Couldn’t write it down: '+e.message); }
+    };
+    rec.start(); $('#mic').setAttribute('aria-pressed','true'); hint('Listening… tap 🎙 again when you’re done.');
+    timer=setTimeout(stop,8000);
   };
 }
 $('#form').onsubmit=e=>{ e.preventDefault(); const t=$('#said').value.trim(); if(t) go(t); };

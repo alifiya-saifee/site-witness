@@ -54,6 +54,29 @@ def test_send_never_sends_it_asks_for_a_tap(client, local):
     assert [e["type"] for e in server.hub.log.list()].count("approval.given") == 1
 
 
+def test_transcribe_needs_pairing_and_audio(client, monkeypatch):
+    seen = {}
+
+    def fake(audio, suffix):
+        seen["suffix"] = suffix
+        if not audio:
+            raise ValueError("No audio was recorded")
+        return {"text": "open the Al Noor slides", "language": "en"}
+    monkeypatch.setattr(server.speech, "transcribe", fake)
+    assert client.post("/api/transcribe", content=b"x", headers={"Content-Type": "audio/webm"}).status_code == 401
+    s = client.post("/api/pair", json={"code": server.hub.pair_code}).json()["session"]
+    h = {"X-Session": s}
+    assert client.post("/api/transcribe", content=b"x", headers=h | {"Content-Type": "text/plain"}).status_code == 415
+    assert client.post("/api/transcribe", content=b"", headers=h | {"Content-Type": "audio/webm"}).status_code == 400
+    r = client.post("/api/transcribe", content=b"abc", headers=h | {"Content-Type": "audio/mp4;codecs=mp4a"})
+    assert r.json()["text"] == "open the Al Noor slides" and seen["suffix"] == ".mp4"
+
+
+def test_too_long_recording_is_refused():
+    with pytest.raises(ValueError):
+        server.speech.transcribe(b"0" * (server.speech.MAX_BYTES + 1))
+
+
 def test_helper_must_be_on_this_mac_with_the_token(client):
     with pytest.raises(Exception):
         with client.websocket_connect(f"/helper/ws?token={server.hub.helper_token}") as ws:

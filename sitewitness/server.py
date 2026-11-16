@@ -12,8 +12,10 @@ Safety rules this file keeps:
 """
 from __future__ import annotations
 
+import asyncio
 import base64
 import os
+import subprocess
 import secrets
 import socket
 import uuid
@@ -22,13 +24,15 @@ from pathlib import Path
 from fastapi import FastAPI, Header, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, Response
 
+from . import speech
 from .commands import parse
 from .events import EventLog
 from .records import BY_ID, PEOPLE, ROOT, allowed
 
 RUN_DIR = ROOT / "run"
 WEB = ROOT / "web"
-PORT = int(os.environ.get("SW_PORT", "8040"))
+PORT = int(os.environ.get("SW_PORT", "8040"))              # http, this Mac only (page + helper)
+SECURE_PORT = int(os.environ.get("SW_SECURE_PORT", "8443"))  # https, for phones on the Wi-Fi (mic needs https)
 LOCAL_HOSTS = {"127.0.0.1", "::1", "localhost"}
 
 
@@ -179,6 +183,24 @@ def approve(aid: str, request: Request, x_session: str | None = Header(default=N
     return {"status": "approved", "note": f"Approved. Demo only: logged “would send {BY_ID[a['file']].title} to {a['to']}”. Nothing was emailed."}
 
 
+AUDIO_TYPES = {"audio/webm": ".webm", "audio/ogg": ".ogg", "audio/mp4": ".mp4", "audio/mpeg": ".mp3",
+               "audio/wav": ".wav", "audio/x-m4a": ".m4a", "audio/aac": ".aac"}
+
+
+@app.post("/api/transcribe")
+async def transcribe(request: Request, x_session: str | None = Header(default=None)):
+    """Voice clip from the page's mic -> text, on this Mac (Whisper). The page then runs the text as a command."""
+    who(request, x_session)
+    kind = (request.headers.get("content-type") or "").split(";")[0].strip().lower()
+    if kind not in AUDIO_TYPES:
+        raise HTTPException(415, "Send the recording as audio")
+    audio = await request.body()
+    try:
+        return await asyncio.to_thread(speech.transcribe, audio, AUDIO_TYPES[kind])
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
 @app.get("/api/events")
 def events(request: Request, x_session: str | None = Header(default=None)):
     who(request, x_session)
@@ -241,19 +263,43 @@ def lan_ip() -> str:
         s.close()
 
 
-def main():
+def make_cert(ip: str) -> tuple[Path, Path]:
+    """A self-signed certificate for this Mac's Wi-Fi address, so phones can use https (and so the mic).
+    Made again whenever the address changes. Kept in run/ (never committed)."""
+    cert, key, stamp = RUN_DIR / "cert.pem", RUN_DIR / "key.pem", RUN_DIR / "cert-ip"
+    if not (cert.exists() and key.exists() and stamp.exists() and stamp.read_text() == ip):
+        subprocess.run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "30",
+                        "-subj", "/CN=Diwan helper demo",
+                        "-addext", f"subjectAltName=IP:{ip},IP:127.0.0.1,DNS:localhost",
+                        "-keyout", str(key), "-out", str(cert)], check=True, capture_output=True)
+        key.chmod(0o600)
+        stamp.write_text(ip)
+    return cert, key
+
+
+async def serve() -> None:
     import uvicorn
+    ip = lan_ip()
+    cert, key = make_cert(ip)
+    local = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=PORT, log_level="warning"))
+    wifi = uvicorn.Server(uvicorn.Config(app, host="0.0.0.0", port=SECURE_PORT, log_level="warning",
+                                         ssl_certfile=str(cert), ssl_keyfile=str(key)))
+    print("\n  Site Witness hub (helper demo)")
+    print(f"  On this Mac:        http://localhost:{PORT}")
+    print(f"  On your phone:      https://{ip}:{SECURE_PORT}   (same Wi-Fi)")
+    print("                      First time: Chrome says “not private” → Advanced → Proceed. That’s this Mac’s own certificate.")
+    print(f"  Pairing code:       {hub.pair_code}")
+    print("  Stop with Ctrl+C\n", flush=True)
+    await asyncio.gather(local.serve(), wifi.serve())
+
+
+def main():
     RUN_DIR.mkdir(exist_ok=True)
     tok = RUN_DIR / "helper-token"
     tok.write_text(hub.helper_token)
     tok.chmod(0o600)
-    ip = lan_ip()
-    print("\n  Site Witness hub (helper demo)")
-    print(f"  On this Mac:        http://localhost:{PORT}")
-    print(f"  On your phone:      http://{ip}:{PORT}   (same Wi-Fi)")
-    print(f"  Pairing code:       {hub.pair_code}")
-    print("  Stop with Ctrl+C\n", flush=True)
-    uvicorn.run(app, host=os.environ.get("SW_HOST", "0.0.0.0"), port=PORT, log_level="warning")
+    speech.warm_up()
+    asyncio.run(serve())
 
 
 if __name__ == "__main__":

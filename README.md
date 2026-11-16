@@ -23,8 +23,10 @@ Say or type “open the Al Noor slides” on your phone; the file opens on the M
 
 The terminal shows a link for your phone (same Wi-Fi) and a 6-digit pairing code. Stop with Ctrl+C.
 
-- On the phone, use your **keyboard’s mic** to dictate: browsers block a page’s own mic on plain `http://` over
-  Wi-Fi. On the Mac (`http://localhost:8040`) the page’s 🎙 button works.
+- **Mic:** tap 🎙, speak (English or Arabic), tap again. The page records a short clip and the Mac writes it down with
+  Whisper (`small` model, runs on the Mac, no API key; about 480 MB downloaded the first time).
+- **Phone:** use the `https://…:8443` link. The first time, Chrome says “not private”: tap Advanced → Proceed (it is
+  this Mac’s own certificate). Browsers only allow a mic on secure pages, so plain `http` is for this Mac only.
 - You pick who is speaking (voice match isn’t built yet). Visitors are refused; “open the report” asks which one;
   “send … to …” waits for your tap and, in this demo, only logs “would send”. Nothing is emailed.
 - macOS asks once for **Screen Recording** (the proof screenshot) and once to let Terminal **control Preview**
