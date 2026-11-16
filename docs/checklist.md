@@ -40,6 +40,7 @@ Key: ⬜ to build · 🟢 done · ❓ open
 | Voice match for staff; a tap for sensitive actions | ⬜ |
 | Helper demo: command from phone (paired) → file opens on the Mac → checked → screenshot proof; permissions, “which one?”, send needs a tap | 🟢 `./run-demo` (`sitewitness/`, `helper/`, `web/control.html`) |
 | Voice match (today you pick the person) | ⬜ |
+| Smart plug demo: “turn on the lamp” → Tapo plug (or pretend lamp) → state read back + before/after camera photo; risky devices need a tap | 🟡 built and tested with the pretend lamp; real plug + camera not tried yet (`sitewitness/devices.py`) |
 | Home Assistant room hub client; commands logged and confirmed | ⬜ |
 | Hub hardware: Pi/mini PC, IR blaster, CEC, Wi-Fi plug | ⬜ |
 | Guiding mode for devices with no interface | ⬜ |
