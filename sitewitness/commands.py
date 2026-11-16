@@ -4,16 +4,20 @@
 - "open the report"                    -> open,  two files match -> ask which one
 - "send the Al Noor report to Karim"   -> send,  Al Noor report, to "Karim" (always needs a tap)
 - Arabic works for the same words: "افتح عرض النور"
+- "turn on the lamp" / «شغّل المصباح»  -> on,    the meeting-room lamp (devices are checked first)
+- "switch the light off" / «طفّي الضوء» -> off,   the meeting-room lamp
 """
 from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
 
+from .devices import DEVICES, Device
 from .records import RECORDS, Record
 
 OPEN_WORDS = ("open", "show", "display", "pull up", "put up", "افتح", "اعرض", "شغل", "شغّل")
 SEND_WORDS = ("send", "email", "share", "forward", "ارسل", "أرسل", "شارك")
+OFF_WORDS = ("off", "turn off", "switch off", "shut", "طفي", "طفى", "اطفي", "أطفئ", "اطفئ", "اطفىء", "سكر", "اقفل")
 
 
 def normalise(text: str) -> str:
@@ -28,14 +32,19 @@ def has(text: str, phrase: str) -> bool:
 
 @dataclass
 class Intent:
-    action: str                  # "open" | "send"
-    text: str                    # the words used to find the file
+    action: str                  # "open" | "send" (a file) or "on" | "off" (a device)
+    text: str                    # the words used to find the file or device
     recipient: str | None = None
     matches: list[Record] = field(default_factory=list)
+    device: Device | None = None
 
 
 def parse(said: str) -> Intent:
     text = normalise(said)
+    devices = [d for d in DEVICES if any(has(text, w) for w in d.words)]
+    if devices:  # a device word wins: "turn on the lamp" never opens a file
+        action = "off" if any(has(text, w) for w in OFF_WORDS) else "on"
+        return Intent(action=action, text=text, device=devices[0])
     action = "send" if any(has(text, w) for w in SEND_WORDS) else "open"
     recipient = None
     if action == "send":

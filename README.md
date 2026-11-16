@@ -42,4 +42,24 @@ The terminal shows a link for your phone (same Wi-Fi) and a 6-digit pairing code
   from the code sample on the magpie-tts-zeroshot page on build.nvidia.com; NVIDIA may need to approve access).
   If anything goes wrong, replies fall back to the Mac voice and the page says why.
 
+## Smart plug demo (“turn on the lamp”)
+
+Say “turn on the lamp” or «شغّل المصباح». The Mac switches the plug, reads it back, and takes a before/after photo
+with its camera to check the lamp really got brighter. If the camera is blocked or sees no change, the page says
+“couldn’t see it” rather than claiming it worked. Visitors are refused. A device that heats or moves (an oven) would
+always wait for an Approve tap.
+
+With no plug set up, a **pretend lamp** on the page switches instead (labelled “pretend”, no camera check).
+
+For the real plug (TP-Link Tapo P100 or P110):
+1. Set it up in the Tapo app on your 2.4 GHz Wi-Fi, with a lamp plugged in.
+2. If the app has **Me → Third-Party Services → Third-Party Compatibility**, switch it on.
+3. Find the plug’s IP address in the app (device settings → Device info).
+4. Add to `.env` (never committed): `SW_PLUG=tapo`, `SW_PLUG_HOST=<IP>`, `TAPO_USERNAME=<Tapo login email>`,
+   `TAPO_PASSWORD=<Tapo password>`. The login only unlocks the plug; commands go straight to it on your Wi-Fi.
+5. Point the Mac camera at the lamp. macOS asks once for **Camera** access (System Settings → Privacy & Security →
+   Camera → allow the app that runs `./run-demo`, e.g. Terminal or VS Code).
+
+The helper only switches devices listed in `sitewitness/devices.py`, only on or off.
+
 Tests: `.venv/bin/pytest -q`

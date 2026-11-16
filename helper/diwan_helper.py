@@ -1,6 +1,7 @@
 """Diwan Helper: the small app on the computer that does what the hub asks, then proves it.
 
-It connects *out* to the hub on this Mac. It does exactly one thing: open a file from Records.
+It connects *out* to the hub on this Mac. It does three things, nothing else:
+open a file from Records, switch a device from the device list on or off, and play the hub's spoken replies.
 - It only accepts a file ID that is in Records, with a one-time token it has not used before.
 - It downloads the file from the hub (never opens a path it is sent), opens it in Preview,
   checks Preview really has it open, takes a screenshot as proof, and sends the result back.
@@ -9,6 +10,11 @@ It connects *out* to the hub on this Mac. It does exactly one thing: open a file
 macOS asks once for Screen Recording (the screenshot) and once to let Terminal talk to Preview
 (the "is it open?" check). If either is refused, the result says "couldn't confirm" rather than
 pretending it worked.
+
+Switching a device: it takes a "before" photo with the Mac camera, switches the plug, reads the plug's
+state back, takes an "after" photo, and checks the picture got brighter (on) or darker (off). If the camera
+is blocked or sees no change, it says so ("couldn't see it") instead of claiming it worked.
+macOS asks once for Camera access.
 
 Run: python helper/diwan_helper.py   (./run-demo starts it for you)
 """
@@ -27,6 +33,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
+from sitewitness.devices import BY_DEVICE, PlugError, plug_from_env  # noqa: E402
 from sitewitness.records import BY_ID  # noqa: E402
 
 RUN_DIR = ROOT / "run"
@@ -34,6 +41,9 @@ OPENED = RUN_DIR / "opened"
 PORT = int(os.environ.get("SW_PORT", "8040"))
 HUB = f"127.0.0.1:{PORT}"
 SAFE_NAME = re.compile(r"^[a-z0-9][a-z0-9-]*\.pdf$")
+CAMERA = os.environ.get("SW_CAMERA", "0")   # 0 = the Mac's own camera (ffmpeg -list_devices shows others)
+BRIGHTER = 8.0   # points out of 255 the picture must change by
+BRIGHT_SHARE = 1.0  # or: % of near-white pixels must change by this much (the camera's auto-exposure hides some of it)
 
 
 def run(cmd: list[str], timeout: float = 10) -> subprocess.CompletedProcess:
@@ -55,12 +65,87 @@ def download_reply(reply_id: str, token: str) -> bytes:
         return r.read()
 
 
+def brightness(jpg: bytes) -> tuple[float, float]:
+    """(average brightness 0-255, % of near-white pixels) of a photo."""
+    from io import BytesIO
+    from PIL import Image, ImageStat
+    im = Image.open(BytesIO(jpg)).convert("L")
+    im.thumbnail((320, 320))
+    hist = im.histogram()
+    return ImageStat.Stat(im).mean[0], 100 * sum(hist[230:]) / max(1, sum(hist))
+
+
+def side_by_side(before: bytes, after: bytes) -> bytes:
+    """One proof picture: before | after."""
+    from io import BytesIO
+    from PIL import Image, ImageDraw
+    a, b = (Image.open(BytesIO(x)).convert("RGB") for x in (before, after))
+    for im in (a, b):
+        im.thumbnail((640, 640))
+    out = Image.new("RGB", (a.width + b.width + 10, max(a.height, b.height)), (10, 13, 19))
+    out.paste(a, (0, 0)); out.paste(b, (a.width + 10, 0))
+    d = ImageDraw.Draw(out)
+    for x, label in ((8, "before"), (a.width + 18, "after")):
+        d.rectangle([x - 4, 6, x + 52, 24], fill=(10, 13, 19)); d.text((x, 9), label, fill=(232, 199, 122))
+    buf = BytesIO(); out.save(buf, "JPEG", quality=82)
+    return buf.getvalue()
+
+
 class Helper:
     def __init__(self, runner=run, fetch=download, opened_dir: Path = OPENED, wait: float = 6.0,
-                 fetch_reply=download_reply):
+                 fetch_reply=download_reply, plug=None, settle: float = 1.5):
         self.run, self.fetch, self.opened_dir, self.wait = runner, fetch, opened_dir, wait
         self.fetch_reply = fetch_reply
+        self.plug = plug if plug is not None else plug_from_env()
+        self.settle = settle
         self.used_tokens: set[str] = set()
+
+    def photo(self) -> bytes | None:
+        """One photo from the Mac camera (skips the first frames while the camera adjusts), or None."""
+        shot = RUN_DIR / "camera.jpg"
+        shot.parent.mkdir(parents=True, exist_ok=True)
+        shot.unlink(missing_ok=True)
+        r = self.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-f", "avfoundation", "-framerate", "30",
+                      "-i", f"{CAMERA}:none", "-vf", "select=gte(n\\,20)", "-frames:v", "1", str(shot)], timeout=15)
+        if r.returncode != 0 or not shot.exists():
+            return None
+        return shot.read_bytes()
+
+    def switch(self, msg: dict) -> dict:
+        """Switch a listed device on or off, then prove it: plug state + before/after camera photo."""
+        result = {"type": "result", "command_id": msg.get("command_id"), "ok": False}
+        dev, action = BY_DEVICE.get(msg.get("device_id")), msg.get("action")
+        if msg.get("type") != "switch" or dev is None:
+            return result | {"detail": "Refused: not a device in the list"}
+        if action not in ("on", "off"):
+            return result | {"detail": "Refused: I only switch devices on or off"}
+        if not re.fullmatch(r"[0-9a-f]{12}", str(msg.get("command_id", ""))):
+            return result | {"detail": "Refused: bad command id"}
+        want = action == "on"
+        result |= {"device": dev.id, "plug": self.plug.kind}
+        before = self.photo() if self.plug.real else None
+        try:
+            state = self.plug.set(want)
+        except PlugError as e:
+            return result | {"detail": f"Couldn't reach the plug ({e})"}
+        if state != want:
+            return result | {"state": state, "detail": f"The plug says it is still {'on' if state else 'off'}"}
+        result |= {"state": state}
+        if not self.plug.real:
+            return result | {"ok": True, "confirmed": True, "detail": f"Pretend plug switched {action} (no camera check)"}
+        time.sleep(self.settle)
+        after = self.photo()
+        if before is None or after is None:
+            return result | {"ok": True, "confirmed": False,
+                             "detail": f"Plug is {action}, but the camera couldn't take a photo (allow Camera for Terminal)"}
+        (m0, w0), (m1, w1) = brightness(before), brightness(after)
+        sign = 1 if want else -1
+        seen = sign * (m1 - m0) >= BRIGHTER or sign * (w1 - w0) >= BRIGHT_SHARE
+        result["proof_b64"] = base64.b64encode(side_by_side(before, after)).decode()
+        change = f"brightness {m0:.0f} → {m1:.0f}"
+        if not seen:
+            return result | {"ok": True, "confirmed": False, "detail": f"Plug is {action}, but the camera saw no change ({change})"}
+        return result | {"ok": True, "confirmed": True, "detail": f"Plug is {action} and the camera saw it ({change})"}
 
     def speak(self, msg: dict) -> dict:
         """Play one of the hub's spoken replies through the Mac's speakers (afplay). Nothing else."""
@@ -160,9 +245,10 @@ async def main():
                             await ws.send(json.dumps(r))
                         asyncio.create_task(play())
                         continue
-                    print(f"  Diwan Helper: asked to open {msg.get('file_id')}", flush=True)
+                    is_switch = msg.get("type") == "switch"
+                    print(f"  Diwan Helper: asked to {'switch ' + str(msg.get('device_id')) + ' ' + str(msg.get('action')) if is_switch else 'open ' + str(msg.get('file_id'))}", flush=True)
                     try:
-                        result = await asyncio.to_thread(helper.open_file, msg)
+                        result = await asyncio.to_thread(helper.switch if is_switch else helper.open_file, msg)
                     except Exception as e:  # never leave the hub waiting
                         result = {"type": "result", "command_id": msg.get("command_id"), "ok": False,
                                   "detail": f"Helper error: {type(e).__name__}"}

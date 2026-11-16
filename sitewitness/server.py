@@ -9,6 +9,8 @@ Safety rules this file keeps:
 - Each file download needs a one-time token tied to one command and one file.
 - "Send" never sends: it creates an approval, and even an approved send is only logged in this demo.
 - A repeated tap (same key) returns the first result; the file is not opened twice.
+- Devices: only ones in the device list, only on/off, only for allowed roles; risky ones (heat, motion)
+  always wait for an Approve tap.
 """
 from __future__ import annotations
 
@@ -24,8 +26,9 @@ from pathlib import Path
 from fastapi import FastAPI, Header, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, Response
 
-from . import speech, voice
+from . import devices, speech, voice
 from .commands import parse
+from .devices import BY_DEVICE, DEVICES, may_use
 from .replies import lang_of, reply
 from .events import EventLog
 from .records import BY_ID, PEOPLE, ROOT, allowed
@@ -51,6 +54,7 @@ class Hub:
         self.replies: dict[str, dict] = {}       # reply id -> text, lang, audio, engine, note
         self.reply_tokens: dict[str, str] = {}   # one-time token for the helper to fetch a reply's audio
         self.tasks: set = set()                  # background jobs (speaking on the Mac), kept so they finish
+        self.device_state: dict[str, bool] = {}  # last state each device reported (from the helper)
 
 
 hub = Hub()
@@ -150,6 +154,8 @@ async def run_command(said: str, person: str, device: str, key: str | None, choo
                    key=f"heard:{key}" if key else None)
     intent = parse(said)
     steps = [{"t": f"Heard “{said}”", "ok": True}]
+    if intent.device:
+        return await run_device(intent.device, intent.action, person, steps, lang, also_mac)
     matches = [BY_ID[choose]] if choose in BY_ID else intent.matches
     if not matches:
         hub.log.append("file.not_found", actor="hub", content={"said": said})
@@ -193,13 +199,56 @@ async def run_command(said: str, person: str, device: str, key: str | None, choo
     return {"status": "sent", "command": cid, "steps": steps + [{"t": "Sent to the Mac", "ok": True}]}
 
 
+async def run_device(dev, action: str, person: str, steps: list, lang: str, also_mac: bool) -> dict:
+    name = PEOPLE[person]["name"]
+    hub.log.append("device.matched", actor="hub", content={"device": dev.id, "action": action})
+    steps.append({"t": f"Found “{dev.name}” ({dev.room}): switch {action}", "ok": True})
+    if not may_use(person, dev):
+        hub.log.append("access.refused", actor="hub", content={"device": dev.id, "person": person})
+        return {"status": "refused", "steps": steps + [{"t": f"{name} is not allowed to use this device", "ok": False}],
+                "reply": await new_reply("refused_device", lang, also_mac, person=name, device=dev.id)}
+    steps.append({"t": f"Allowed for {name} ({PEOPLE[person]['role']})", "ok": True})
+    if dev.risky:  # heats or moves: a person taps Approve first, every time
+        aid = uuid.uuid4().hex[:10]
+        hub.approvals[aid] = {"device": dev.id, "action": action, "by": name, "done": False, "lang": lang,
+                              "also_mac": also_mac}
+        hub.log.append("approval.requested", actor="hub",
+                       content={"approval": aid, "action": f"switch {action}", "device": dev.id})
+        return {"status": "needs_approval", "approval": aid, "question": f"Switch {dev.name} {action}?",
+                "steps": steps + [{"t": "This device heats or moves: it needs your tap", "ok": None}],
+                "reply": await new_reply("approve_device", lang, also_mac, device=dev.id, action=action)}
+    return await send_switch(dev, action, steps, lang, also_mac)
+
+
+async def send_switch(dev, action: str, steps: list, lang: str, also_mac: bool) -> dict:
+    if hub.helper is None:
+        hub.log.append("device.failed", actor="hub", content={"device": dev.id, "why": "no helper connected"})
+        return {"status": "no_helper", "steps": steps + [{"t": "No helper is connected on the Mac", "ok": False}],
+                "reply": await new_reply("no_helper", lang, False)}
+    cid = uuid.uuid4().hex[:12]
+    hub.commands[cid] = {"state": "sent", "detail": "Sent to the Mac", "device": dev.id, "action": action,
+                         "proof": None, "lang": lang, "also_mac": also_mac, "reply": None}
+    hub.log.append("device.command", actor="hub", content={"command": cid, "do": f"switch {action}", "device": dev.id})
+    await hub.helper.send_json({"type": "switch", "command_id": cid, "device_id": dev.id, "action": action})
+    return {"status": "sent", "command": cid, "steps": steps + [{"t": "Sent to the Mac", "ok": True}]}
+
+
+@app.get("/api/devices")
+def devices_info(request: Request, x_session: str | None = Header(default=None)):
+    who(request, x_session)
+    kind = devices.plug_kind()
+    return [{"id": d.id, "name": d.name, "room": d.room, "on": hub.device_state.get(d.id), "plug": kind}
+            for d in DEVICES]
+
+
 @app.get("/api/status/{cid}")
 def status(cid: str, request: Request, x_session: str | None = Header(default=None)):
     who(request, x_session)
     c = hub.commands.get(cid)
     if not c:
         raise HTTPException(404, "Unknown command")
-    return {"state": c["state"], "detail": c["detail"], "proof": c["proof"] is not None, "reply": c["reply"]}
+    return {"state": c["state"], "detail": c["detail"], "proof": c["proof"] is not None, "reply": c["reply"],
+            "device": c.get("device")}
 
 
 @app.get("/api/proof/{cid}")
@@ -218,6 +267,15 @@ async def approve(aid: str, request: Request, x_session: str | None = Header(def
     a = hub.approvals.get(aid)
     if not a:
         raise HTTPException(404, "Unknown approval")
+    if "device" in a:
+        if a["done"]:
+            return a["answer"] | {"repeat": True}
+        a["done"] = True
+        hub.log.append("approval.given", actor=a["by"], content={"approval": aid, "device": a["device"],
+                                                                  "action": a["action"]}, key=f"approval:{aid}")
+        a["answer"] = await send_switch(BY_DEVICE[a["device"]], a["action"], [{"t": "Approved by you", "ok": True}],
+                                        a["lang"], a["also_mac"])
+        return a["answer"] | {"status": "approved", "then": a["answer"]["status"]}
     if not a["done"]:
         a["done"] = True
         hub.log.append("approval.given", actor=a["by"], content={"approval": aid, "file": a["file"], "to": a["to"],
@@ -357,12 +415,19 @@ async def helper_ws(ws: WebSocket):
                 c["proof"] = base64.b64decode(msg["proof_b64"])
             confirmed = bool(msg.get("ok")) and bool(msg.get("confirmed"))
             state = "confirmed" if confirmed else ("unconfirmed" if msg.get("ok") else "failed")
+            if "device" in c and isinstance(msg.get("state"), bool):
+                hub.device_state[c["device"]] = msg["state"]
             if c.get("reply") is None:  # attach the reply BEFORE the state changes: the page stops polling then
-                c["reply"] = await new_reply(state, c.get("lang", "en"), c.get("also_mac", False), file=c["file"])
+                if "device" in c:
+                    outcome = c["action"] if confirmed else ("switch_unseen" if msg.get("ok") else "switch_failed")
+                    c["reply"] = await new_reply(outcome, c.get("lang", "en"), c.get("also_mac", False), device=c["device"])
+                else:
+                    c["reply"] = await new_reply(state, c.get("lang", "en"), c.get("also_mac", False), file=c["file"])
             c["detail"] = str(msg.get("detail", ""))[:200]
             c["state"] = state
+            what = {"device": c["device"], "action": c["action"]} if "device" in c else {"file": c["file"]}
             hub.log.append("device.confirmed" if confirmed else "device.failed", actor="helper",
-                           content={"command": msg["command_id"], "file": c["file"], "detail": c["detail"]},
+                           content={"command": msg["command_id"], **what, "detail": c["detail"]},
                            key=f"result:{msg['command_id']}")
     except WebSocketDisconnect:
         pass

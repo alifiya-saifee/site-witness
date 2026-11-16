@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 TYPES = {
     "command.heard",       # someone said or typed a command
     "file.matched",        # the command was matched to a file in Records
+    "device.matched",      # the command was matched to a device in the device list
     "file.not_found",      # nothing matched
     "file.ambiguous",      # several files matched; the person was asked which one
     "access.refused",      # the person may not open or send that file

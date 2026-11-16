@@ -54,6 +54,10 @@ header span{font-size:12px;color:var(--muted)}
 .log div{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .pair input{letter-spacing:.4em;text-align:center;font:600 24px var(--mono)}
 .err{color:var(--bad);font-size:13px;min-height:18px;margin-top:6px}
+.dev{display:flex;align-items:center;gap:12px;padding:6px 0}
+.dev .bulb{font-size:26px;filter:grayscale(1) opacity(.45);transition:filter .3s}
+.dev.on .bulb{filter:none;text-shadow:0 0 18px var(--gold)}
+.dev small{display:block;color:var(--muted);font-size:12px}
 .tog{display:flex;gap:8px;align-items:center;font-size:14px;margin:4px 0}
 .tog input{width:18px;height:18px;accent-color:var(--gold)}
 .said{margin-top:10px;padding:10px 12px;border-radius:12px;background:var(--gold-soft);border:1px solid rgba(232,199,122,.35);font-size:14px}
@@ -90,6 +94,12 @@ header span{font-size:12px;color:var(--muted)}
       </form>
       <p class="hint" id="michint"></p>
       <div class="chips" id="chips"></div>
+    </section>
+
+    <section class="card">
+      <p class="k">Devices</p>
+      <div id="devices"></div>
+      <p class="hint" id="devhint"></p>
     </section>
 
     <section class="card">
@@ -130,7 +140,7 @@ header span{font-size:12px;color:var(--muted)}
 const $=s=>document.querySelector(s);
 const store={ get(k){ try{return localStorage.getItem(k);}catch(e){return null;} }, set(k,v){ try{localStorage.setItem(k,v);}catch(e){} } };
 let session=store.get('sw-session')||'', person=store.get('sw-person')||'layla', people=[], lastSaid='';
-const EXAMPLES=['open the Al Noor slides','open the report','send the Al Noor report to Karim','open the clinic report','افتح عرض النور'];
+const EXAMPLES=['open the Al Noor slides','open the report','send the Al Noor report to Karim','turn on the lamp','turn off the lamp','افتح عرض النور','شغّل المصباح'];
 
 async function api(path,opts={}){
   let r;
@@ -278,7 +288,9 @@ async function go(text, choose, lang){
   }
   if(r.status==='needs_approval'){
     $('#approve').hidden=false; $('#aq').textContent=r.question; $('#aok').disabled=false;
-    $('#aok').onclick=async()=>{ $('#aok').disabled=true; const a=await api('/api/approve/'+r.approval,{method:'POST'}); drawSteps(r.steps.slice(0,-1).concat([{t:'Approved by you',ok:true},{t:a.note,ok:true}])); $('#approve').hidden=true; playReply(a.reply); refresh(); };
+    $('#aok').onclick=async()=>{ $('#aok').disabled=true; const a=await api('/api/approve/'+r.approval,{method:'POST'}); $('#approve').hidden=true;
+      const done=r.steps.slice(0,-1).concat(a.steps||[{t:'Approved by you',ok:true},{t:a.note,ok:true}]);
+      drawSteps(done); playReply(a.reply); if(a.then==='sent') follow(a.command, done); refresh(); };
   }
   playReply(r.reply);
   if(r.status==='sent') follow(r.command, r.steps);
@@ -293,7 +305,8 @@ async function follow(cid, steps){
     const last={confirmed:{t:s.detail,ok:true},unconfirmed:{t:s.detail,ok:null},failed:{t:s.detail,ok:false}}[s.state];
     drawSteps(steps.concat([last]));
     playReply(s.reply);
-    if(s.proof) $('#proof').innerHTML=`<img alt="Screenshot of the Mac as proof" src="/api/proof/${cid}?s=${encodeURIComponent(session)}&t=${Date.now()}"><p class="hint">Proof: the Mac’s screen right after opening.</p>`;
+    const cap=s.device?['Camera photos of the device, before and after','Proof: the Mac camera, before and after switching.']:['Screenshot of the Mac as proof','Proof: the Mac’s screen right after opening.'];
+    if(s.proof) $('#proof').innerHTML=`<img alt="${cap[0]}" src="/api/proof/${cid}?s=${encodeURIComponent(session)}&t=${Date.now()}"><p class="hint">${cap[1]}</p>`;
     refresh(); return;
   }
   drawSteps(steps.concat([{t:'No answer from the Mac within 20 seconds',ok:false}]));
@@ -301,6 +314,9 @@ async function follow(cid, steps){
 async function refresh(){
   try{
     const info=await api('/api/info'); $('#hdot').classList.toggle('on',info.helper); $('#hdot span').textContent=info.helper?'Mac helper connected':'Mac helper not connected';
+    const devs=await api('/api/devices');
+    $('#devices').innerHTML=devs.map(d=>`<div class="dev ${d.on?'on':''}"><span class="bulb" aria-hidden="true">💡</span><div><b>${esc(d.name[0].toUpperCase()+d.name.slice(1))}</b>${d.plug==='pretend'?' <span class="sample">pretend</span>':''}<small>${esc(d.room)} · ${d.on===true?'on':d.on===false?'off':'not used yet'}</small></div></div>`).join('');
+    $('#devhint').textContent=devs.some(d=>d.plug==='pretend')?'No real plug is set up, so this is a pretend lamp on the screen. Add the Tapo settings to .env for the real one.':'A real Tapo plug. The Mac camera checks the lamp after each switch.';
     const ev=await api('/api/events');
     $('#log').innerHTML=ev.map(e=>`<div>${esc(e.at.slice(11,19))} ${esc(e.type)} · ${esc(e.actor)} ${esc(Object.values(e.content).filter(v=>typeof v==='string').join(' · '))}</div>`).join('');
   }catch(e){}

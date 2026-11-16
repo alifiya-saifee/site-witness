@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import re
 
+from .devices import BY_DEVICE
+
 ARABIC = re.compile(r"[؀-ۿ]")
 
 # how each file is said out loud
@@ -25,6 +27,13 @@ TEXT = {
     "not_found":   ("I couldn't find that file.", "لم أجد هذا الملف."),
     "no_helper":   ("The Mac helper isn't connected.", "مساعد الماك غير متصل."),
     "approved":    ("Approved. In this demo nothing is sent.", "تمت الموافقة. في هذا العرض لا يُرسل شيء."),
+    # devices
+    "on":          ("Done. {Device} is on.", "تم. {device} يعمل الآن."),
+    "off":         ("Done. {Device} is off.", "تم. أطفأتُ {device}."),
+    "switch_unseen": ("I switched it, but the camera couldn't see the change.", "نفّذتُ الأمر، لكن الكاميرا لم ترَ التغيير."),
+    "switch_failed": ("Sorry, I couldn't reach {device}.", "عذرًا، لم أتمكن من الوصول إلى {device}."),
+    "refused_device": ("Sorry, {person} isn't allowed to use {device}.", "عذرًا، {person} لا يملك صلاحية استخدام {device}."),
+    "approve_device": ("Switch {device} {action}? Tap Approve.", "هل {action} {device}؟ اضغط موافقة."),
 }
 
 ARABIC_NAMES = {"Visitor": "الزائر", "Layla Mansour": "ليلى منصور", "Omar Khan": "عمر خان", "Karim": "كريم"}
@@ -34,11 +43,18 @@ def lang_of(said: str, heard_lang: str | None = None) -> str:
     return "ar" if heard_lang == "ar" or ARABIC.search(said or "") else "en"
 
 
-def reply(outcome: str, lang: str, *, file: str | None = None, person: str = "", to: str = "", n: int = 2) -> str:
+ARABIC_ACTION = {"on": "أشغّل", "off": "أطفئ"}
+
+
+def reply(outcome: str, lang: str, *, file: str | None = None, person: str = "", to: str = "", n: int = 2,
+          device: str | None = None, action: str = "on") -> str:
     en, ar = TEXT[outcome]
+    dev = BY_DEVICE[device] if device else None
     if lang == "ar":
         name = SPOKEN[file][1] if file else ""
-        return ar.format(file=name, person=ARABIC_NAMES.get(person, person),
-                         to=ARABIC_NAMES.get(to, to), n=n)
+        return ar.format(file=name, person=ARABIC_NAMES.get(person, person), to=ARABIC_NAMES.get(to, to), n=n,
+                         device=dev.name_ar if dev else "", action=ARABIC_ACTION.get(action, action))
     name = SPOKEN[file][0] if file else ""
-    return en.format(file=name, file_cap=name[:1].upper() + name[1:], person=person, to=to, n=n)
+    dname = dev.name if dev else ""
+    return en.format(file=name, person=person, to=to, n=n, device=dname,
+                     Device=dname[:1].upper() + dname[1:], action=action)
