@@ -60,6 +60,27 @@ For the real plug (TP-Link Tapo P100 or P110):
 5. Point the Mac camera at the lamp. macOS asks once for **Camera** access (System Settings → Privacy & Security →
    Camera → allow the app that runs `./run-demo`, e.g. Terminal or VS Code).
 
-The helper only switches devices listed in `sitewitness/devices.py`, only on or off.
+## Your own devices on the Wi-Fi (TV, printer, plug)
+
+On the Mac page (http://localhost:8040), **Scan my Wi-Fi** listens for about 6 seconds and lists what it finds. It
+only listens: nothing is controlled until you **add** it, with a name, a room and who may use it (Owner / Broker /
+Visitor). Adding and removing work only on the Mac itself. Added devices are kept in `run/devices.json` (not
+committed). Once a real device is added, the pretend lamp goes away.
+
+| Device | What you can say | How it is checked |
+|---|---|---|
+| Samsung TV (2016+) | “turn off the TV”, “turn on the TV”, “volume up / down”, “mute”, “open YouTube / Netflix”, «اطفئ التلفزيون» | the TV is asked afterwards: power state, volume number, mute, app visible |
+| Printer (IPP: HP, Canon, Epson, Brother) | “print the Al Noor report”, «اطبع تقرير النور» | always waits for your **Approve** tap; then the print job is followed to “completed” |
+| Tapo plug | “turn on the lamp” | plug state + camera photo |
+
+- **TV, first time:** when you add it, the TV shows an **“Allow”** pop-up. Accept it with the TV remote. Its token
+  is kept in `run/` (only you can read it, never logged).
+- **TV, turning on:** needs **Power On with Mobile** on the TV (Settings → General → Network → Expert Settings).
+  Without it, “turn on” says plainly that the TV didn't wake.
+- **Printer:** only files from Records can be printed, by people allowed to open them. No printer setup on the Mac
+  is needed. Problems like “out of paper” are said out loud.
+- Other things on the Wi-Fi are listed as “no connector yet”.
+
+The helper only runs the actions each kind allows (for example a plug has no volume) on devices in the list.
 
 Tests: `.venv/bin/pytest -q`

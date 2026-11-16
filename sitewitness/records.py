@@ -30,7 +30,7 @@ RECORDS: tuple[Record, ...] = (
            ("al noor", "alnoor", "slides", "slide", "deck", "presentation", "النور", "عرض", "العرض", "الشرائح"),
            ("owner", "broker", "engineer")),
     Record("alnoor-report", "Al Noor Residence · signed Law 3 report", "al-noor-signed-report.pdf",
-           ("al noor", "alnoor", "report", "signed report", "safety report", "النور", "التقرير"),
+           ("al noor", "alnoor", "report", "signed report", "safety report", "النور", "التقرير", "تقرير"),
            ("owner", "engineer")),
     Record("marina-quote", "Marina Court · inspection quote", "marina-court-quote.pdf",
            ("marina", "marina court", "quote", "price", "مارينا", "عرض السعر"),

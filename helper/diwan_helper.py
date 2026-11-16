@@ -1,7 +1,8 @@
 """Diwan Helper: the small app on the computer that does what the hub asks, then proves it.
 
 It connects *out* to the hub on this Mac. It does three things, nothing else:
-open a file from Records, switch a device from the device list on or off, and play the hub's spoken replies.
+open a file from Records, run one allowed action on a device someone added (plug, Samsung TV, printer),
+and play the hub's spoken replies.
 - It only accepts a file ID that is in Records, with a one-time token it has not used before.
 - It downloads the file from the hub (never opens a path it is sent), opens it in Preview,
   checks Preview really has it open, takes a screenshot as proof, and sends the result back.
@@ -33,7 +34,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-from sitewitness.devices import BY_DEVICE, PlugError, plug_from_env  # noqa: E402
+from sitewitness import devices  # noqa: E402
+from sitewitness.connectors.ipp_printer import Printer, PrinterError  # noqa: E402
+from sitewitness.connectors.plug import PlugError, TapoPlug  # noqa: E402
+from sitewitness.connectors.samsung_tv import SamsungTV  # noqa: E402
 from sitewitness.records import BY_ID  # noqa: E402
 
 RUN_DIR = ROOT / "run"
@@ -93,11 +97,15 @@ def side_by_side(before: bytes, after: bytes) -> bytes:
 
 class Helper:
     def __init__(self, runner=run, fetch=download, opened_dir: Path = OPENED, wait: float = 6.0,
-                 fetch_reply=download_reply, plug=None, settle: float = 1.5):
+                 fetch_reply=download_reply, plug=None, settle: float = 1.5, tv_for=None, printer_for=None,
+                 device_list=None):
         self.run, self.fetch, self.opened_dir, self.wait = runner, fetch, opened_dir, wait
         self.fetch_reply = fetch_reply
-        self.plug = plug if plug is not None else plug_from_env()
+        self.plug = plug if plug is not None else devices.plug_from_env()
         self.settle = settle
+        self.tv_for = tv_for or (lambda d: SamsungTV(d.address, d.mac, RUN_DIR / f"tv-{d.id}.token"))
+        self.printer_for = printer_for or (lambda d: Printer(d.address, d.path or "ipp/print"))
+        self.device_list = device_list or devices.current  # read fresh each time: devices can be added or removed
         self.used_tokens: set[str] = set()
 
     def photo(self) -> bytes | None:
@@ -111,27 +119,71 @@ class Helper:
             return None
         return shot.read_bytes()
 
-    def switch(self, msg: dict) -> dict:
-        """Switch a listed device on or off, then prove it: plug state + before/after camera photo."""
+    def device(self, msg: dict) -> dict:
+        """Run one allowed action on one added device, then prove it."""
         result = {"type": "result", "command_id": msg.get("command_id"), "ok": False}
-        dev, action = BY_DEVICE.get(msg.get("device_id")), msg.get("action")
-        if msg.get("type") != "switch" or dev is None:
+        dev = next((d for d in self.device_list() if d.id == msg.get("device_id")), None)
+        action = msg.get("action")
+        if msg.get("type") != "device" or dev is None:
             return result | {"detail": "Refused: not a device in the list"}
-        if action not in ("on", "off"):
-            return result | {"detail": "Refused: I only switch devices on or off"}
+        if action not in dev.actions:
+            return result | {"detail": f"Refused: a {dev.kind} can't do that"}
         if not re.fullmatch(r"[0-9a-f]{12}", str(msg.get("command_id", ""))):
             return result | {"detail": "Refused: bad command id"}
-        want = action == "on"
-        result |= {"device": dev.id, "plug": self.plug.kind}
-        before = self.photo() if self.plug.real else None
+        result["device"] = dev.id
+        if dev.kind == "tv":
+            return self.tv(dev, action, result)
+        if dev.kind == "printer":
+            return self.print_file(dev, msg, result)
+        return self.switch(dev, action, result)
+
+    def tv(self, dev, action: str, result: dict) -> dict:
+        r = self.tv_for(dev).do(action)
+        keep = {k: r[k] for k in ("ok", "confirmed", "detail", "state", "before", "after", "muted", "app") if k in r}
+        return result | keep
+
+    def print_file(self, dev, msg: dict, result: dict) -> dict:
+        rec = BY_ID.get(msg.get("file_id"))
+        if rec is None or rec.filename != msg.get("filename") or not SAFE_NAME.match(msg.get("filename", "")):
+            return result | {"detail": "Refused: not a file in Records"}
+        if not msg.get("token") or msg["token"] in self.used_tokens:
+            return result | {"detail": "Refused: token missing or already used"}
+        self.used_tokens.add(msg["token"])
         try:
-            state = self.plug.set(want)
+            pdf = self.fetch(rec.id, msg["token"])
+        except Exception as e:
+            return result | {"detail": f"Could not get the file: {type(e).__name__}"}
+        try:
+            r = self.printer_for(dev).print_pdf(pdf, rec.title)
+        except PrinterError as e:
+            return result | {"detail": f"Printer: {e}"}
+        return result | {k: r[k] for k in ("ok", "confirmed", "detail", "problems", "job") if k in r}
+
+    def plug_for(self, dev):
+        if dev.id == devices.LAMP.id:
+            return self.plug
+        user, pw = os.environ.get("TAPO_USERNAME"), os.environ.get("TAPO_PASSWORD")
+        if not (user and pw):
+            raise PlugError("add TAPO_USERNAME and TAPO_PASSWORD to .env")
+        return TapoPlug(dev.address, user, pw)
+
+    def switch(self, dev, action: str, result: dict) -> dict:
+        """Switch a plug on or off, then prove it: plug state + before/after camera photo."""
+        try:
+            plug = self.plug_for(dev)
+        except PlugError as e:
+            return result | {"detail": f"Can't use the plug yet: {e}"}
+        want = action == "on"
+        result |= {"plug": plug.kind}
+        before = self.photo() if plug.real else None
+        try:
+            state = plug.set(want)
         except PlugError as e:
             return result | {"detail": f"Couldn't reach the plug ({e})"}
         if state != want:
             return result | {"state": state, "detail": f"The plug says it is still {'on' if state else 'off'}"}
         result |= {"state": state}
-        if not self.plug.real:
+        if not plug.real:
             return result | {"ok": True, "confirmed": True, "detail": f"Pretend plug switched {action} (no camera check)"}
         time.sleep(self.settle)
         after = self.photo()
@@ -245,10 +297,11 @@ async def main():
                             await ws.send(json.dumps(r))
                         asyncio.create_task(play())
                         continue
-                    is_switch = msg.get("type") == "switch"
-                    print(f"  Diwan Helper: asked to {'switch ' + str(msg.get('device_id')) + ' ' + str(msg.get('action')) if is_switch else 'open ' + str(msg.get('file_id'))}", flush=True)
+                    is_device = msg.get("type") == "device"
+                    what = f"{msg.get('action')} on {msg.get('device_id')}" if is_device else f"open {msg.get('file_id')}"
+                    print(f"  Diwan Helper: asked to {what}", flush=True)
                     try:
-                        result = await asyncio.to_thread(helper.switch if is_switch else helper.open_file, msg)
+                        result = await asyncio.to_thread(helper.device if is_device else helper.open_file, msg)
                     except Exception as e:  # never leave the hub waiting
                         result = {"type": "result", "command_id": msg.get("command_id"), "ok": False,
                                   "detail": f"Helper error: {type(e).__name__}"}

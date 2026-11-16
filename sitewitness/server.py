@@ -9,8 +9,9 @@ Safety rules this file keeps:
 - Each file download needs a one-time token tied to one command and one file.
 - "Send" never sends: it creates an approval, and even an approved send is only logged in this demo.
 - A repeated tap (same key) returns the first result; the file is not opened twice.
-- Devices: only ones in the device list, only on/off, only for allowed roles; risky ones (heat, motion)
-  always wait for an Approve tap.
+- Devices: only ones a person added on the Mac (or the lamp), only the actions their kind allows, only for the
+  roles ticked when adding. Printing and risky devices (heat, motion) always wait for an Approve tap.
+- Scanning the Wi-Fi and adding or removing devices work only from the Mac itself.
 """
 from __future__ import annotations
 
@@ -26,9 +27,9 @@ from pathlib import Path
 from fastapi import FastAPI, Header, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, Response
 
-from . import devices, speech, voice
+from . import devices, discover, speech, voice
 from .commands import parse
-from .devices import BY_DEVICE, DEVICES, may_use
+from .devices import may_use
 from .replies import lang_of, reply
 from .events import EventLog
 from .records import BY_ID, PEOPLE, ROOT, allowed
@@ -55,6 +56,7 @@ class Hub:
         self.reply_tokens: dict[str, str] = {}   # one-time token for the helper to fetch a reply's audio
         self.tasks: set = set()                  # background jobs (speaking on the Mac), kept so they finish
         self.device_state: dict[str, bool] = {}  # last state each device reported (from the helper)
+        self.found: dict[str, dict] = {}         # the last Wi-Fi scan: key -> what was found
 
 
 hub = Hub()
@@ -154,8 +156,9 @@ async def run_command(said: str, person: str, device: str, key: str | None, choo
                    key=f"heard:{key}" if key else None)
     intent = parse(said)
     steps = [{"t": f"Heard “{said}”", "ok": True}]
-    if intent.device:
-        return await run_device(intent.device, intent.action, person, steps, lang, also_mac)
+    if intent.kind:
+        dev = devices.by_id(choose[4:]) if choose and choose.startswith("dev:") else intent.device
+        return await run_device(intent, dev, person, steps, lang, also_mac, choose)
     matches = [BY_ID[choose]] if choose in BY_ID else intent.matches
     if not matches:
         hub.log.append("file.not_found", actor="hub", content={"said": said})
@@ -199,46 +202,165 @@ async def run_command(said: str, person: str, device: str, key: str | None, choo
     return {"status": "sent", "command": cid, "steps": steps + [{"t": "Sent to the Mac", "ok": True}]}
 
 
-async def run_device(dev, action: str, person: str, steps: list, lang: str, also_mac: bool) -> dict:
-    name = PEOPLE[person]["name"]
+def say_action(action: str) -> str:
+    return {"volume_up": "volume up", "volume_down": "volume down", "app:youtube": "open YouTube",
+            "app:netflix": "open Netflix", "hdmi": "change input", "print": "print"}.get(action, f"switch {action}")
+
+
+async def run_device(intent, dev, person: str, steps: list, lang: str, also_mac: bool, choose: str | None) -> dict:
+    name, action = PEOPLE[person]["name"], intent.action
+    if dev is None:
+        if len(intent.device_options) > 1:
+            return {"status": "choose", "steps": steps + [{"t": f"{len(intent.device_options)} devices fit. Which one?", "ok": None}],
+                    "options": [{"id": "dev:" + d.id, "title": f"{d.name[:1].upper() + d.name[1:]} ({d.room})"}
+                                for d in intent.device_options],
+                    "reply": await new_reply("choose_device", lang, also_mac, n=len(intent.device_options))}
+        hub.log.append("device.failed", actor="hub", content={"kind": intent.kind, "why": "none added"})
+        return {"status": "not_found", "steps": steps + [{"t": f"No {intent.kind} is added yet (Scan my Wi-Fi on the Mac)", "ok": False}],
+                "reply": await new_reply("no_device", lang, also_mac, kind=intent.kind)}
     hub.log.append("device.matched", actor="hub", content={"device": dev.id, "action": action})
-    steps.append({"t": f"Found “{dev.name}” ({dev.room}): switch {action}", "ok": True})
-    if not may_use(person, dev):
+    steps.append({"t": f"Found “{dev.name}” ({dev.room}): {say_action(action)}", "ok": True})
+    if not may_use(person, dev) or action not in dev.actions:
         hub.log.append("access.refused", actor="hub", content={"device": dev.id, "person": person})
         return {"status": "refused", "steps": steps + [{"t": f"{name} is not allowed to use this device", "ok": False}],
-                "reply": await new_reply("refused_device", lang, also_mac, person=name, device=dev.id)}
+                "reply": await new_reply("refused_device", lang, also_mac, person=name, device=dev)}
     steps.append({"t": f"Allowed for {name} ({PEOPLE[person]['role']})", "ok": True})
-    if dev.risky:  # heats or moves: a person taps Approve first, every time
+    rec = None
+    if action == "print":
+        matches = [BY_ID[choose]] if choose in BY_ID else intent.matches
+        if not matches:
+            return {"status": "not_found", "steps": steps + [{"t": "Which file? No file in Records matches that", "ok": False}],
+                    "reply": await new_reply("not_found", lang, also_mac)}
+        if len(matches) > 1:
+            return {"status": "choose", "steps": steps + [{"t": f"{len(matches)} files match. Which one?", "ok": None}],
+                    "options": [{"id": r.id, "title": r.title} for r in matches],
+                    "reply": await new_reply("choose", lang, also_mac, n=len(matches))}
+        rec = matches[0]
+        if not allowed(person, rec):
+            hub.log.append("access.refused", actor="hub", content={"file": rec.id, "person": person})
+            return {"status": "refused", "steps": steps + [{"t": f"{name} is not allowed to print this file", "ok": False}],
+                    "reply": await new_reply("refused", lang, also_mac, person=name)}
+        steps.append({"t": f"File: “{rec.title}”", "ok": True})
+    if dev.needs_tap:  # printing (paper, can't undo) and risky devices: a person taps Approve first, every time
         aid = uuid.uuid4().hex[:10]
-        hub.approvals[aid] = {"device": dev.id, "action": action, "by": name, "done": False, "lang": lang,
-                              "also_mac": also_mac}
+        hub.approvals[aid] = {"device": dev.id, "action": action, "file": rec.id if rec else None, "by": name,
+                              "done": False, "lang": lang, "also_mac": also_mac}
         hub.log.append("approval.requested", actor="hub",
-                       content={"approval": aid, "action": f"switch {action}", "device": dev.id})
-        return {"status": "needs_approval", "approval": aid, "question": f"Switch {dev.name} {action}?",
-                "steps": steps + [{"t": "This device heats or moves: it needs your tap", "ok": None}],
-                "reply": await new_reply("approve_device", lang, also_mac, device=dev.id, action=action)}
-    return await send_switch(dev, action, steps, lang, also_mac)
+                       content={"approval": aid, "action": say_action(action), "device": dev.id, **({"file": rec.id} if rec else {})})
+        question = f"Print “{rec.title}” on {dev.name}?" if rec else f"{say_action(action).capitalize()}: {dev.name}?"
+        why = "Printing uses paper and can't be undone: it needs your tap" if rec else "This device heats or moves: it needs your tap"
+        rep = await new_reply("approve_print", lang, also_mac, file=rec.id, device=dev) if rec else \
+            await new_reply("approve_device", lang, also_mac, device=dev, action=action)
+        return {"status": "needs_approval", "approval": aid, "question": question,
+                "steps": steps + [{"t": why, "ok": None}], "reply": rep}
+    return await send_device(dev, action, steps, lang, also_mac)
 
 
-async def send_switch(dev, action: str, steps: list, lang: str, also_mac: bool) -> dict:
+async def send_device(dev, action: str, steps: list, lang: str, also_mac: bool, file: str | None = None) -> dict:
     if hub.helper is None:
         hub.log.append("device.failed", actor="hub", content={"device": dev.id, "why": "no helper connected"})
         return {"status": "no_helper", "steps": steps + [{"t": "No helper is connected on the Mac", "ok": False}],
                 "reply": await new_reply("no_helper", lang, False)}
     cid = uuid.uuid4().hex[:12]
-    hub.commands[cid] = {"state": "sent", "detail": "Sent to the Mac", "device": dev.id, "action": action,
-                         "proof": None, "lang": lang, "also_mac": also_mac, "reply": None}
-    hub.log.append("device.command", actor="hub", content={"command": cid, "do": f"switch {action}", "device": dev.id})
-    await hub.helper.send_json({"type": "switch", "command_id": cid, "device_id": dev.id, "action": action})
+    hub.commands[cid] = {"state": "sent", "detail": "Sent to the Mac", "device": dev.id, "kind": dev.kind,
+                         "action": action, "file": file, "proof": None, "lang": lang, "also_mac": also_mac, "reply": None}
+    msg = {"type": "device", "command_id": cid, "device_id": dev.id, "action": action}
+    if file:  # printing: the helper downloads the file with a one-time token, as for opening
+        ftoken = secrets.token_urlsafe(18)
+        hub.file_tokens[ftoken] = file
+        msg |= {"file_id": file, "filename": BY_ID[file].filename, "token": ftoken}
+    hub.log.append("device.command", actor="hub", content={"command": cid, "do": say_action(action), "device": dev.id,
+                                                           **({"file": file} if file else {})})
+    await hub.helper.send_json(msg)
     return {"status": "sent", "command": cid, "steps": steps + [{"t": "Sent to the Mac", "ok": True}]}
+
+
+def device_outcome(c: dict, msg: dict, confirmed: bool) -> tuple[str, dict]:
+    """Which sentence the agent says after a device result."""
+    kind, action, kw = c["kind"], c["action"], {"device": c["device"]}
+    if not msg.get("ok"):
+        if kind == "printer":
+            problems = msg.get("problems") or []
+            return ("printer_problem", kw | {"problem": ", ".join(problems)}) if problems else ("print_failed", kw)
+        return ("tv_failed" if kind == "tv" else "switch_failed"), kw
+    if kind == "tv" and action == "hdmi":
+        return "hdmi", kw
+    if not confirmed:
+        return {"plug": "switch_unseen", "tv": "tv_unsure", "printer": "print_waiting"}[kind], kw
+    if kind == "printer":
+        return "printed", kw | {"file": c["file"]}
+    if kind == "tv":
+        if action.startswith("volume"):
+            return action, kw | {"before": msg.get("before", ""), "after": msg.get("after", "")}
+        if action == "mute":
+            return ("muted" if msg.get("muted") else "unmuted"), kw
+        if action.startswith("app:"):
+            return "app", kw | {"app": msg.get("app", "")}
+        if action == "pair":
+            return "tv_paired", kw
+    return action, kw
 
 
 @app.get("/api/devices")
 def devices_info(request: Request, x_session: str | None = Header(default=None)):
     who(request, x_session)
-    kind = devices.plug_kind()
-    return [{"id": d.id, "name": d.name, "room": d.room, "on": hub.device_state.get(d.id), "plug": kind}
-            for d in DEVICES]
+    pretend = devices.plug_kind() == "pretend"
+    return [{"id": d.id, "name": d.name, "room": d.room, "kind": d.kind, "model": d.model,
+             "on": hub.device_state.get(d.id), "pretend": d.id == devices.LAMP.id and pretend,
+             "roles": list(d.roles)} for d in devices.current()]
+
+
+def mac_only(request: Request) -> None:
+    if not is_local(request.client.host if request.client else None):
+        raise HTTPException(403, "Only on the Mac itself")
+
+
+@app.post("/api/scan")
+async def scan_wifi(request: Request):
+    """Listen for devices on the Wi-Fi (about 6 seconds). Controls nothing."""
+    mac_only(request)
+    found = await asyncio.to_thread(discover.scan, 6)
+    hub.found = {f["key"]: f for f in found}
+    hub.log.append("network.scanned", actor="hub", content={"found": str(len(found)),
+                                                            "kinds": ", ".join(sorted({f["kind"] for f in found}))})
+    added = {d.id for d in devices.load_added()}
+    return [{k: v for k, v in f.items() if k not in ("uid", "mac")} | {"added": f["key"] in added} for f in found]
+
+
+@app.post("/api/devices/add")
+async def add_device(request: Request):
+    mac_only(request)
+    body = await request.json()
+    f = hub.found.get(str(body.get("key", "")))
+    if not f:
+        raise HTTPException(404, "Scan first, then add a device from the list")
+    try:
+        dev = devices.from_found(f, body.get("name", ""), body.get("room", ""), body.get("roles") or [],
+                                 body.get("name_ar", ""))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    devices.save_added([d for d in devices.load_added() if d.id != dev.id] + [dev])
+    hub.log.append("device.added", actor="owner", content={"device": dev.id, "kind": dev.kind, "name": dev.name,
+                                                           "room": dev.room, "roles": ", ".join(dev.roles)})
+    out = {"status": "added", "device": dev.id}
+    if dev.kind == "tv":  # the TV shows "Allow" on screen now; the page follows this command
+        out["pairing"] = await send_device(dev, "pair", [{"t": f"Added “{dev.name}”", "ok": True},
+                                                         {"t": "Look at the TV: accept “Allow” with the remote", "ok": None}],
+                                           "en", False)
+    return out
+
+
+@app.delete("/api/devices/{device_id}")
+def remove_device(device_id: str, request: Request):
+    mac_only(request)
+    left = [d for d in devices.load_added() if d.id != device_id]
+    if len(left) == len(devices.load_added()):
+        raise HTTPException(404, "Not an added device")
+    devices.save_added(left)
+    (devices.RUN_DIR / f"tv-{device_id}.token").unlink(missing_ok=True)
+    hub.device_state.pop(device_id, None)
+    hub.log.append("device.removed", actor="owner", content={"device": device_id})
+    return {"status": "removed"}
 
 
 @app.get("/api/status/{cid}")
@@ -248,7 +370,7 @@ def status(cid: str, request: Request, x_session: str | None = Header(default=No
     if not c:
         raise HTTPException(404, "Unknown command")
     return {"state": c["state"], "detail": c["detail"], "proof": c["proof"] is not None, "reply": c["reply"],
-            "device": c.get("device")}
+            "device": c.get("device"), "kind": c.get("kind")}
 
 
 @app.get("/api/proof/{cid}")
@@ -273,8 +395,11 @@ async def approve(aid: str, request: Request, x_session: str | None = Header(def
         a["done"] = True
         hub.log.append("approval.given", actor=a["by"], content={"approval": aid, "device": a["device"],
                                                                   "action": a["action"]}, key=f"approval:{aid}")
-        a["answer"] = await send_switch(BY_DEVICE[a["device"]], a["action"], [{"t": "Approved by you", "ok": True}],
-                                        a["lang"], a["also_mac"])
+        dev = devices.by_id(a["device"])
+        if dev is None:
+            raise HTTPException(410, "That device was removed")
+        a["answer"] = await send_device(dev, a["action"], [{"t": "Approved by you", "ok": True}],
+                                        a["lang"], a["also_mac"], file=a.get("file"))
         return a["answer"] | {"status": "approved", "then": a["answer"]["status"]}
     if not a["done"]:
         a["done"] = True
@@ -419,8 +544,8 @@ async def helper_ws(ws: WebSocket):
                 hub.device_state[c["device"]] = msg["state"]
             if c.get("reply") is None:  # attach the reply BEFORE the state changes: the page stops polling then
                 if "device" in c:
-                    outcome = c["action"] if confirmed else ("switch_unseen" if msg.get("ok") else "switch_failed")
-                    c["reply"] = await new_reply(outcome, c.get("lang", "en"), c.get("also_mac", False), device=c["device"])
+                    outcome, kw = device_outcome(c, msg, confirmed)
+                    c["reply"] = await new_reply(outcome, c.get("lang", "en"), c.get("also_mac", False), **kw)
                 else:
                     c["reply"] = await new_reply(state, c.get("lang", "en"), c.get("also_mac", False), file=c["file"])
             c["detail"] = str(msg.get("detail", ""))[:200]

@@ -16,6 +16,9 @@ TYPES = {
     "command.heard",       # someone said or typed a command
     "file.matched",        # the command was matched to a file in Records
     "device.matched",      # the command was matched to a device in the device list
+    "device.added",        # a person added a device found on the Wi-Fi (name, room, who may use it)
+    "device.removed",
+    "network.scanned",     # the Mac listened for devices on the Wi-Fi (it controls nothing)
     "file.not_found",      # nothing matched
     "file.ambiguous",      # several files matched; the person was asked which one
     "access.refused",      # the person may not open or send that file

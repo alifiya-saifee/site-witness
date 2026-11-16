@@ -58,6 +58,12 @@ header span{font-size:12px;color:var(--muted)}
 .dev .bulb{font-size:26px;filter:grayscale(1) opacity(.45);transition:filter .3s}
 .dev.on .bulb{filter:none;text-shadow:0 0 18px var(--gold)}
 .dev small{display:block;color:var(--muted);font-size:12px}
+.dev .grow{flex:1;min-width:0}
+.found{border-top:1px solid var(--line-2);padding:10px 0}
+.found:first-child{border-top:0}
+.found .row{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+.found input[type=text]{flex:1;min-width:120px;background:transparent;border:1px solid var(--line-2);border-radius:8px;padding:7px 9px;color:var(--ink);font:inherit;font-size:14px}
+.found .tog{font-size:13px}
 .tog{display:flex;gap:8px;align-items:center;font-size:14px;margin:4px 0}
 .tog input{width:18px;height:18px;accent-color:var(--gold)}
 .said{margin-top:10px;padding:10px 12px;border-radius:12px;background:var(--gold-soft);border:1px solid rgba(232,199,122,.35);font-size:14px}
@@ -102,6 +108,14 @@ header span{font-size:12px;color:var(--muted)}
       <p class="hint" id="devhint"></p>
     </section>
 
+    <section class="card" id="scancard" hidden>
+      <p class="k">Scan my Wi-Fi (this Mac only)</p>
+      <p class="hint" style="margin:0 0 8px">Looks for devices on this Wi-Fi for about 6 seconds. It only listens: nothing is controlled until you add it here, with a name, a room and who may use it.</p>
+      <button class="btn" type="button" id="scan">Scan my Wi-Fi</button>
+      <div id="found"></div>
+      <p class="hint" id="scanhint"></p>
+    </section>
+
     <section class="card">
       <p class="k">Spoken replies</p>
       <label class="tog"><input type="checkbox" id="speakhere" checked> Say replies on this device</label>
@@ -140,7 +154,7 @@ header span{font-size:12px;color:var(--muted)}
 const $=s=>document.querySelector(s);
 const store={ get(k){ try{return localStorage.getItem(k);}catch(e){return null;} }, set(k,v){ try{localStorage.setItem(k,v);}catch(e){} } };
 let session=store.get('sw-session')||'', person=store.get('sw-person')||'layla', people=[], lastSaid='';
-const EXAMPLES=['open the Al Noor slides','open the report','send the Al Noor report to Karim','turn on the lamp','turn off the lamp','افتح عرض النور','شغّل المصباح'];
+const EXAMPLES=['open the Al Noor slides','open the report','send the Al Noor report to Karim','turn on the lamp','turn off the TV','volume up','open YouTube on the TV','print the Al Noor report','افتح عرض النور','اطفئ التلفزيون'];
 
 async function api(path,opts={}){
   let r;
@@ -165,7 +179,8 @@ async function start(){
   $('#hdot').classList.toggle('on',info.helper); $('#hdot span').textContent=info.helper?'Mac helper connected':'Mac helper not connected';
   if(!info.paired){ $('#pair').hidden=false; $('#main').hidden=true; $('#code').focus(); return; }
   $('#pair').hidden=true; $('#main').hidden=false;
-  drawPeople(); drawChips(); setupMic(); setupReplies(info.local); refresh(); setInterval(refresh,3000);
+  isLocal=!!info.local;
+  drawPeople(); drawChips(); setupMic(); setupReplies(info.local); setupScan(); refresh(); setInterval(refresh,3000);
 }
 $('#join').onclick=async()=>{
   $('#perr').textContent='';
@@ -253,6 +268,32 @@ function setupReplies(local){
   };
 }
 
+/* Scan my Wi-Fi (Mac only): list what was found; add one with a name, room and who may use it. */
+let isLocal=false;
+function setupScan(){
+  if(!isLocal) return;
+  $('#scancard').hidden=false;
+  $('#scan').onclick=async()=>{
+    $('#scan').disabled=true; $('#scanhint').textContent='Listening for about 6 seconds…'; $('#found').innerHTML='';
+    let found; try{ found=await api('/api/scan',{method:'POST'}); }catch(e){ $('#scanhint').textContent='Scan failed: '+e.message; $('#scan').disabled=false; return; }
+    $('#scan').disabled=false;
+    const what={tv:'TV',printer:'Printer',plug:'Smart plug'};
+    $('#scanhint').textContent=found.length?`Found ${found.length}. Add only your own devices.`:'Nothing found. Is the device on and on this Wi-Fi?';
+    $('#found').innerHTML=found.map((f,i)=>`<div class="found"><b>${esc(f.label)}</b><small style="display:block;color:var(--muted);font-size:12px">${f.connector?what[f.kind]:'No connector yet ('+esc((f.what||[]).join(', '))+')'}${f.model&&f.model!==f.label?' · '+esc(f.model):''} · ${esc(f.address)}</small>${
+      f.added?'<p class="hint">Already added.</p>':f.connector?`<div class="row"><input type="text" id="n${i}" value="${esc(f.kind==='tv'?'Living room TV':f.kind==='printer'?'Office printer':f.label)}" aria-label="Name"><input type="text" id="r${i}" value="${f.kind==='tv'?'Living room':'Office'}" aria-label="Room"></div><div class="row">${['owner','broker','visitor'].map(r=>`<label class="tog"><input type="checkbox" data-role="${r}" data-i="${i}" ${r!=='visitor'?'checked':''}> ${r}</label>`).join('')}<button class="btn primary" type="button" data-add="${i}">Add</button></div>`:''}</div>`).join('');
+    $('#found').querySelectorAll('[data-add]').forEach(b=>b.onclick=async()=>{
+      const i=b.dataset.add, f=found[i];
+      const roles=[...document.querySelectorAll(`[data-i="${i}"]:checked`)].map(x=>x.dataset.role);
+      b.disabled=true;
+      try{
+        const a=await api('/api/devices/add',{method:'POST',body:JSON.stringify({key:f.key,name:$('#n'+i).value,room:$('#r'+i).value,roles})});
+        $('#scanhint').textContent=`Added “${$('#n'+i).value}”.`+(f.kind==='tv'?' Look at the TV now and accept “Allow” with the remote.':'');
+        if(a.pairing && a.pairing.status==='sent'){ $('#result').hidden=false; drawSteps(a.pairing.steps); follow(a.pairing.command, a.pairing.steps); }
+        refresh();
+      }catch(e){ $('#scanhint').textContent='Couldn’t add it: '+e.message; b.disabled=false; }
+    });
+  };
+}
 function drawSteps(steps){
   $('#steps').innerHTML=steps.map(s=>`<div><b class="${s.ok===true?'ok':s.ok===false?'no':'wait'}">${s.ok===true?'✓':s.ok===false?'✕':'…'}</b><span>${esc(s.t)}</span></div>`).join('');
 }
@@ -297,7 +338,7 @@ async function go(text, choose, lang){
   refresh();
 }
 async function follow(cid, steps){
-  const until=Date.now()+20000;
+  const until=Date.now()+75000;  // printing can take up to a minute
   while(Date.now()<until){
     await new Promise(res=>setTimeout(res,700));
     const s=await api('/api/status/'+cid).catch(()=>null);
@@ -305,18 +346,20 @@ async function follow(cid, steps){
     const last={confirmed:{t:s.detail,ok:true},unconfirmed:{t:s.detail,ok:null},failed:{t:s.detail,ok:false}}[s.state];
     drawSteps(steps.concat([last]));
     playReply(s.reply);
-    const cap=s.device?['Camera photos of the device, before and after','Proof: the Mac camera, before and after switching.']:['Screenshot of the Mac as proof','Proof: the Mac’s screen right after opening.'];
+    const cap=s.device?['Camera photos of the device, before and after','Proof: the Mac camera, before and after.']:['Screenshot of the Mac as proof','Proof: the Mac’s screen right after opening.'];
     if(s.proof) $('#proof').innerHTML=`<img alt="${cap[0]}" src="/api/proof/${cid}?s=${encodeURIComponent(session)}&t=${Date.now()}"><p class="hint">${cap[1]}</p>`;
     refresh(); return;
   }
-  drawSteps(steps.concat([{t:'No answer from the Mac within 20 seconds',ok:false}]));
+  drawSteps(steps.concat([{t:'No answer from the Mac within 75 seconds',ok:false}]));
 }
 async function refresh(){
   try{
     const info=await api('/api/info'); $('#hdot').classList.toggle('on',info.helper); $('#hdot span').textContent=info.helper?'Mac helper connected':'Mac helper not connected';
     const devs=await api('/api/devices');
-    $('#devices').innerHTML=devs.map(d=>`<div class="dev ${d.on?'on':''}"><span class="bulb" aria-hidden="true">💡</span><div><b>${esc(d.name[0].toUpperCase()+d.name.slice(1))}</b>${d.plug==='pretend'?' <span class="sample">pretend</span>':''}<small>${esc(d.room)} · ${d.on===true?'on':d.on===false?'off':'not used yet'}</small></div></div>`).join('');
-    $('#devhint').textContent=devs.some(d=>d.plug==='pretend')?'No real plug is set up, so this is a pretend lamp on the screen. Add the Tapo settings to .env for the real one.':'A real Tapo plug. The Mac camera checks the lamp after each switch.';
+    const icon={plug:'💡',tv:'📺',printer:'🖨️'};
+    $('#devices').innerHTML=devs.map(d=>`<div class="dev ${d.on?'on':''}"><span class="bulb" aria-hidden="true">${icon[d.kind]||'🔌'}</span><div class="grow"><b>${esc(d.name[0].toUpperCase()+d.name.slice(1))}</b>${d.pretend?' <span class="sample">pretend</span>':''}<small>${esc(d.room)}${d.model?' · '+esc(d.model):''} · ${d.kind==='printer'?'prints after your tap':d.on===true?'on':d.on===false?'off':'not used yet'} · ${esc(d.roles.join(', '))}</small></div>${isLocal&&!d.pretend&&d.id!=='room-lamp'?`<button class="btn" type="button" data-rm="${esc(d.id)}">Remove</button>`:''}</div>`).join('');
+    $('#devices').querySelectorAll('[data-rm]').forEach(b=>b.onclick=async()=>{ await api('/api/devices/'+b.dataset.rm,{method:'DELETE'}); refresh(); });
+    $('#devhint').textContent=devs.some(d=>d.pretend)?'No real device is added yet, so this is a pretend lamp on the screen. On the Mac, use “Scan my Wi-Fi” to add your TV or printer.':'Only these devices can be controlled, and only by the people shown.';
     const ev=await api('/api/events');
     $('#log').innerHTML=ev.map(e=>`<div>${esc(e.at.slice(11,19))} ${esc(e.type)} · ${esc(e.actor)} ${esc(Object.values(e.content).filter(v=>typeof v==='string').join(' · '))}</div>`).join('');
   }catch(e){}
