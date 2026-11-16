@@ -34,4 +34,12 @@ The terminal shows a link for your phone (same Wi-Fi) and a 6-digit pairing code
 - The helper only opens files listed in `sitewitness/records.py`, each download needs a one-time token, and it never
   runs any other command.
 
+- **Spoken replies:** after each command the agent answers out loud on the device you used (“Done. I’ve opened the
+  Al Noor slides on your Mac.”), in English or Arabic. Switch on **“Also say it on the Mac’s speakers”** to hear it
+  from the Mac too. Default voice: the Mac’s own (Samantha / Majed), nothing sent out.
+- **Your own voice (optional, English only):** on the Mac page, tick consent and record 5 seconds. Then put these in
+  `.env` (never committed): `SW_TTS=magpie`, `NVIDIA_API_KEY=…`, `SW_MAGPIE_FUNCTION_ID=…` (copy the function id
+  from the code sample on the magpie-tts-zeroshot page on build.nvidia.com; NVIDIA may need to approve access).
+  If anything goes wrong, replies fall back to the Mac voice and the page says why.
+
 Tests: `.venv/bin/pytest -q`

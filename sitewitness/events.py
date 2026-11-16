@@ -26,6 +26,9 @@ TYPES = {
     "pairing.joined",      # a phone or browser joined with the pairing code
     "helper.connected",
     "helper.disconnected",
+    "reply.spoken",          # the agent's spoken reply was played (where, which voice)
+    "voice.sample_saved",    # the owner recorded a voice sample, with consent (the audio is never logged)
+    "voice.sample_deleted",
 }
 
 

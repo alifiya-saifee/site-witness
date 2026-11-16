@@ -50,10 +50,36 @@ def download(file_id: str, token: str) -> bytes:
         return r.read()
 
 
+def download_reply(reply_id: str, token: str) -> bytes:
+    with urllib.request.urlopen(f"http://{HUB}/helper/reply/{reply_id}?t={token}", timeout=30) as r:
+        return r.read()
+
+
 class Helper:
-    def __init__(self, runner=run, fetch=download, opened_dir: Path = OPENED, wait: float = 6.0):
+    def __init__(self, runner=run, fetch=download, opened_dir: Path = OPENED, wait: float = 6.0,
+                 fetch_reply=download_reply):
         self.run, self.fetch, self.opened_dir, self.wait = runner, fetch, opened_dir, wait
+        self.fetch_reply = fetch_reply
         self.used_tokens: set[str] = set()
+
+    def speak(self, msg: dict) -> dict:
+        """Play one of the hub's spoken replies through the Mac's speakers (afplay). Nothing else."""
+        rid = str(msg.get("reply_id", ""))
+        out = {"type": "spoken", "reply_id": rid, "ok": False}
+        if msg.get("type") != "speak" or not re.fullmatch(r"[0-9a-f]{10}", rid):
+            return out | {"detail": "Refused: not a reply id"}
+        if not msg.get("token") or msg["token"] in self.used_tokens:
+            return out | {"detail": "Refused: token missing or already used"}
+        self.used_tokens.add(msg["token"])
+        try:
+            audio = self.fetch_reply(rid, msg["token"])
+        except Exception as e:
+            return out | {"detail": f"Could not get the reply: {e}"}
+        path = self.opened_dir.parent / "replies" / f"{rid}.m4a"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(audio)
+        ok = self.run(["afplay", str(path)], timeout=30).returncode == 0
+        return out | {"ok": ok, "detail": "Played on the Mac" if ok else "afplay failed"}
 
     def check(self, msg: dict) -> str | None:
         """Why this message must be refused, or None if it is fine."""
@@ -126,6 +152,14 @@ async def main():
                 print("  Diwan Helper: connected. Waiting for commands.", flush=True)
                 async for raw in ws:
                     msg = json.loads(raw)
+                    if msg.get("type") == "speak":
+                        # play in the background so a long reply never holds up the next command
+                        async def play(m=msg):
+                            r = await asyncio.to_thread(helper.speak, m)
+                            print(f"  Diwan Helper: {r['detail']}", flush=True)
+                            await ws.send(json.dumps(r))
+                        asyncio.create_task(play())
+                        continue
                     print(f"  Diwan Helper: asked to open {msg.get('file_id')}", flush=True)
                     try:
                         result = await asyncio.to_thread(helper.open_file, msg)

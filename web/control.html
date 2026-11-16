@@ -54,6 +54,11 @@ header span{font-size:12px;color:var(--muted)}
 .log div{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .pair input{letter-spacing:.4em;text-align:center;font:600 24px var(--mono)}
 .err{color:var(--bad);font-size:13px;min-height:18px;margin-top:6px}
+.tog{display:flex;gap:8px;align-items:center;font-size:14px;margin:4px 0}
+.tog input{width:18px;height:18px;accent-color:var(--gold)}
+.said{margin-top:10px;padding:10px 12px;border-radius:12px;background:var(--gold-soft);border:1px solid rgba(232,199,122,.35);font-size:14px}
+.said small{display:block;color:var(--muted);font-size:12px;margin-top:2px}
+.said button{margin-top:6px}
 [hidden]{display:none!important}
 </style>
 </head>
@@ -87,9 +92,27 @@ header span{font-size:12px;color:var(--muted)}
       <div class="chips" id="chips"></div>
     </section>
 
+    <section class="card">
+      <p class="k">Spoken replies</p>
+      <label class="tog"><input type="checkbox" id="speakhere" checked> Say replies on this device</label>
+      <label class="tog"><input type="checkbox" id="alsomac"> Also say it on the Mac’s speakers</label>
+    </section>
+
+    <section class="card" id="myvoice" hidden>
+      <p class="k">My voice (this Mac only)</p>
+      <p class="hint" style="margin:0 0 8px">Record 5 seconds of your own voice. With NVIDIA magpie switched on, English replies are spoken in your voice. Arabic always uses the Mac’s voice. When magpie is on, your sample and the reply text are sent to NVIDIA.</p>
+      <label class="tog"><input type="checkbox" id="consent"> This is my own voice and I agree to use it for replies</label>
+      <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">
+        <button class="btn" type="button" id="vrec">Record 5 seconds</button>
+        <button class="btn" type="button" id="vdel">Delete my voice</button>
+      </div>
+      <p class="hint" id="vstate"></p>
+    </section>
+
     <section class="card" id="result" hidden>
       <p class="k">What happened</p>
       <div class="steps" id="steps"></div>
+      <div class="said" id="said-back" hidden></div>
       <div class="options" id="options"></div>
       <div class="approve" id="approve" hidden><div id="aq"></div><button class="btn primary" id="aok" style="margin-top:8px;width:100%">Approve</button></div>
       <div class="proof" id="proof"></div>
@@ -132,7 +155,7 @@ async function start(){
   $('#hdot').classList.toggle('on',info.helper); $('#hdot span').textContent=info.helper?'Mac helper connected':'Mac helper not connected';
   if(!info.paired){ $('#pair').hidden=false; $('#main').hidden=true; $('#code').focus(); return; }
   $('#pair').hidden=true; $('#main').hidden=false;
-  drawPeople(); drawChips(); setupMic(); refresh(); setInterval(refresh,3000);
+  drawPeople(); drawChips(); setupMic(); setupReplies(info.local); refresh(); setInterval(refresh,3000);
 }
 $('#join').onclick=async()=>{
   $('#perr').textContent='';
@@ -180,24 +203,73 @@ function setupMic(){
         if(!r.ok) throw new Error(d.detail||r.statusText);
         if(!d.text){ hint('I couldn’t make out any words. Try again, a little closer to the mic.'); return; }
         hint(`Heard (${d.language==='ar'?'Arabic':d.language==='en'?'English':d.language}). Tap 🎙 to speak again.`);
-        $('#said').value=d.text; go(d.text);
+        $('#said').value=d.text; go(d.text, undefined, d.language);
       }catch(e){ hint('Couldn’t write it down: '+e.message); }
     };
     rec.start(); $('#mic').setAttribute('aria-pressed','true'); hint('Listening… tap 🎙 again when you’re done.');
     timer=setTimeout(stop,8000);
   };
 }
-$('#form').onsubmit=e=>{ e.preventDefault(); const t=$('#said').value.trim(); if(t) go(t); };
+$('#form').onsubmit=e=>{ e.preventDefault(); const t=$('#said').value.trim(); if(t) go(t, undefined, null); };
+
+/* Reply switches, remembered on this device */
+function setupReplies(local){
+  for(const id of ['speakhere','alsomac']){
+    const v=store.get('sw-'+id); if(v!==null) $('#'+id).checked=v==='1';
+    $('#'+id).onchange=()=>store.set('sw-'+id,$('#'+id).checked?'1':'0');
+  }
+  if(!local) return;
+  $('#myvoice').hidden=false;
+  const show=async()=>{ try{ const v=await api('/api/voice'); $('#vstate').textContent=(v.sample?'Your voice sample is saved on this Mac. ':'No voice sample yet. ')+(v.magpie==='on'?'NVIDIA magpie is on: English replies use your voice.':`NVIDIA magpie: ${v.magpie}. Replies use the Mac’s voice.`); }catch(e){} };
+  show();
+  $('#vdel').onclick=async()=>{ await api('/api/voice-sample',{method:'DELETE'}); show(); };
+  $('#vrec').onclick=async()=>{
+    if(!$('#consent').checked){ $('#vstate').textContent='Tick “This is my own voice” first.'; return; }
+    let stream; try{ stream=await navigator.mediaDevices.getUserMedia({audio:true}); }catch(e){ $('#vstate').textContent='The mic is blocked for this page.'; return; }
+    const type=['audio/webm','audio/mp4','audio/ogg'].find(t=>MediaRecorder.isTypeSupported(t))||'';
+    const rec=new MediaRecorder(stream, type?{mimeType:type}:{}), chunks=[];
+    rec.ondataavailable=e=>{ if(e.data.size) chunks.push(e.data); };
+    rec.onstop=async()=>{
+      stream.getTracks().forEach(t=>t.stop());
+      const kind=(rec.mimeType||type||'audio/webm').split(';')[0];
+      $('#vstate').textContent='Saving…';
+      const r=await fetch('/api/voice-sample?consent=my-own-voice',{method:'POST',headers:{'Content-Type':kind},body:new Blob(chunks,{type:kind})});
+      const d=await r.json().catch(()=>({}));
+      if(!r.ok){ $('#vstate').textContent=d.detail||'Couldn’t save it'; return; }
+      show();
+    };
+    rec.start(); let left=5; $('#vstate').textContent=`Recording… speak naturally (${left})`;
+    const t=setInterval(()=>{ left--; if(left>0) $('#vstate').textContent=`Recording… speak naturally (${left})`; else { clearInterval(t); rec.stop(); } },1000);
+  };
+}
 
 function drawSteps(steps){
   $('#steps').innerHTML=steps.map(s=>`<div><b class="${s.ok===true?'ok':s.ok===false?'no':'wait'}">${s.ok===true?'✓':s.ok===false?'✕':'…'}</b><span>${esc(s.t)}</span></div>`).join('');
 }
-async function go(text, choose){
-  lastSaid=text;
-  $('#result').hidden=false; $('#options').innerHTML=''; $('#approve').hidden=true; $('#proof').innerHTML='';
+/* Spoken replies: fetch the reply's audio from the Mac and play it here. If the phone blocks autoplay,
+   show a ▶ button instead. The label says which voice was used (yours via NVIDIA, or the Mac's). */
+let lastLang=null;
+async function playReply(rep){
+  if(!rep) return;
+  const box=$('#said-back'); box.hidden=false;
+  box.innerHTML=`🔊 “${esc(rep.text)}”<small id="vnote">${$('#speakhere').checked?'Getting the voice…':'Muted on this device'}</small>`;
+  if(!$('#speakhere').checked) return;
+  try{
+    const r=await fetch(`/api/reply/${rep.id}.m4a?s=${encodeURIComponent(session)}`);
+    if(!r.ok) throw new Error(r.statusText);
+    const note=r.headers.get('X-Voice')||'';
+    const url=URL.createObjectURL(await r.blob()), a=new Audio(url);
+    $('#vnote').textContent=note;
+    try{ await a.play(); }
+    catch(e){ box.insertAdjacentHTML('beforeend','<button class="btn" type="button" id="hear">▶ Hear reply</button>'); $('#hear').onclick=()=>{ a.play(); $('#hear').remove(); }; }
+  }catch(e){ $('#vnote').textContent='Couldn’t get the voice: '+e.message; }
+}
+async function go(text, choose, lang){
+  lastSaid=text; if(lang!==undefined) lastLang=lang;
+  $('#result').hidden=false; $('#options').innerHTML=''; $('#approve').hidden=true; $('#proof').innerHTML=''; $('#said-back').hidden=true;
   drawSteps([{t:`Heard “${text}”`,ok:null}]);
   let r;
-  try{ r=await api('/api/command',{method:'POST',body:JSON.stringify({text,person,key:key(),choose})}); }
+  try{ r=await api('/api/command',{method:'POST',body:JSON.stringify({text,person,key:key(),choose,lang:lastLang,also_mac:$('#alsomac').checked})}); }
   catch(e){ if(e.status===401){ session=''; start(); } drawSteps([{t:e.message,ok:false}]); return; }
   drawSteps(r.steps);
   if(r.status==='choose'){
@@ -206,8 +278,9 @@ async function go(text, choose){
   }
   if(r.status==='needs_approval'){
     $('#approve').hidden=false; $('#aq').textContent=r.question; $('#aok').disabled=false;
-    $('#aok').onclick=async()=>{ $('#aok').disabled=true; const a=await api('/api/approve/'+r.approval,{method:'POST'}); drawSteps(r.steps.slice(0,-1).concat([{t:'Approved by you',ok:true},{t:a.note,ok:true}])); $('#approve').hidden=true; refresh(); };
+    $('#aok').onclick=async()=>{ $('#aok').disabled=true; const a=await api('/api/approve/'+r.approval,{method:'POST'}); drawSteps(r.steps.slice(0,-1).concat([{t:'Approved by you',ok:true},{t:a.note,ok:true}])); $('#approve').hidden=true; playReply(a.reply); refresh(); };
   }
+  playReply(r.reply);
   if(r.status==='sent') follow(r.command, r.steps);
   refresh();
 }
@@ -219,6 +292,7 @@ async function follow(cid, steps){
     if(!s || s.state==='sent') continue;
     const last={confirmed:{t:s.detail,ok:true},unconfirmed:{t:s.detail,ok:null},failed:{t:s.detail,ok:false}}[s.state];
     drawSteps(steps.concat([last]));
+    playReply(s.reply);
     if(s.proof) $('#proof').innerHTML=`<img alt="Screenshot of the Mac as proof" src="/api/proof/${cid}?s=${encodeURIComponent(session)}&t=${Date.now()}"><p class="hint">Proof: the Mac’s screen right after opening.</p>`;
     refresh(); return;
   }

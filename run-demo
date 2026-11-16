@@ -4,6 +4,9 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
+# settings and keys (NVIDIA_API_KEY etc.) come from .env if you made one; nothing here prints them
+if [ -f .env ]; then set -a; . ./.env; set +a; fi
+
 if [ ! -x .venv/bin/python ]; then
   echo "  Setting up (first run only)…"
   python3 -m venv .venv

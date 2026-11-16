@@ -24,8 +24,9 @@ from pathlib import Path
 from fastapi import FastAPI, Header, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, Response
 
-from . import speech
+from . import speech, voice
 from .commands import parse
+from .replies import lang_of, reply
 from .events import EventLog
 from .records import BY_ID, PEOPLE, ROOT, allowed
 
@@ -47,6 +48,9 @@ class Hub:
         self.commands: dict[str, dict] = {}      # command id -> state, detail, proof
         self.file_tokens: dict[str, str] = {}    # one-time download token -> file id
         self.approvals: dict[str, dict] = {}
+        self.replies: dict[str, dict] = {}       # reply id -> text, lang, audio, engine, note
+        self.reply_tokens: dict[str, str] = {}   # one-time token for the helper to fetch a reply's audio
+        self.tasks: set = set()                  # background jobs (speaking on the Mac), kept so they finish
 
 
 hub = Hub()
@@ -102,13 +106,45 @@ async def command(request: Request, x_session: str | None = Header(default=None)
         raise HTTPException(400, "Unknown person")
     if key and key in hub.results:
         return hub.results[key] | {"repeat": True}
-    answer = await run_command(said, person, device, key, choose)
+    lang = lang_of(said, body.get("lang"))
+    answer = await run_command(said, person, device, key, choose, lang, bool(body.get("also_mac")))
     if key:
         hub.results[key] = answer
     return answer
 
 
-async def run_command(said: str, person: str, device: str, key: str | None, choose: str | None) -> dict:
+# ---------------- spoken replies ----------------
+
+async def new_reply(outcome: str, lang: str, also_mac: bool, **kw) -> dict:
+    """Make the sentence the agent says back. The audio is made when first asked for (and cached).
+    With also_mac, the helper plays it through the Mac's speakers too."""
+    rid = uuid.uuid4().hex[:10]
+    hub.replies[rid] = {"text": reply(outcome, lang, **kw), "lang": lang, "audio": None, "engine": None, "note": None}
+    if also_mac:  # in the background: making the audio takes a moment, and nothing should wait for it
+        task = asyncio.create_task(say_on_mac(rid))
+        hub.tasks.add(task)
+        task.add_done_callback(hub.tasks.discard)
+    return {"id": rid, "text": hub.replies[rid]["text"], "lang": lang}
+
+
+async def reply_audio(rid: str) -> dict:
+    r = hub.replies[rid]
+    if r["audio"] is None:
+        r["audio"], r["engine"], r["note"] = await asyncio.to_thread(voice.speak, r["text"], r["lang"])
+    return r
+
+
+async def say_on_mac(rid: str) -> None:
+    if hub.helper is None:
+        return
+    await reply_audio(rid)  # make it before asking, so the Mac speaks without a gap
+    token = secrets.token_urlsafe(18)
+    hub.reply_tokens[token] = rid
+    await hub.helper.send_json({"type": "speak", "reply_id": rid, "token": token})
+
+
+async def run_command(said: str, person: str, device: str, key: str | None, choose: str | None,
+                      lang: str = "en", also_mac: bool = False) -> dict:
     name = PEOPLE[person]["name"]
     hub.log.append("command.heard", actor=name, content={"said": said, "device": device},
                    key=f"heard:{key}" if key else None)
@@ -117,36 +153,43 @@ async def run_command(said: str, person: str, device: str, key: str | None, choo
     matches = [BY_ID[choose]] if choose in BY_ID else intent.matches
     if not matches:
         hub.log.append("file.not_found", actor="hub", content={"said": said})
-        return {"status": "not_found", "steps": steps + [{"t": "No file in Records matches that", "ok": False}]}
+        return {"status": "not_found", "steps": steps + [{"t": "No file in Records matches that", "ok": False}],
+                "reply": await new_reply("not_found", lang, also_mac)}
     if len(matches) > 1:
         hub.log.append("file.ambiguous", actor="hub", content={"options": [r.id for r in matches]})
         return {"status": "choose", "steps": steps + [{"t": f"{len(matches)} files match. Which one?", "ok": None}],
-                "options": [{"id": r.id, "title": r.title} for r in matches]}
+                "options": [{"id": r.id, "title": r.title} for r in matches],
+                "reply": await new_reply("choose", lang, also_mac, n=len(matches))}
     rec = matches[0]
     hub.log.append("file.matched", actor="hub", content={"file": rec.id, "title": rec.title})
     steps.append({"t": f"Found “{rec.title}”", "ok": True})
     if not allowed(person, rec):
         hub.log.append("access.refused", actor="hub", content={"file": rec.id, "person": person})
-        return {"status": "refused", "steps": steps + [{"t": f"{name} is not allowed to open this file", "ok": False}]}
+        return {"status": "refused", "steps": steps + [{"t": f"{name} is not allowed to open this file", "ok": False}],
+                "reply": await new_reply("refused", lang, also_mac, person=name)}
     steps.append({"t": f"Allowed for {name} ({PEOPLE[person]['role']})", "ok": True})
 
     if intent.action == "send":
         aid = uuid.uuid4().hex[:10]
         to = intent.recipient or "someone"
-        hub.approvals[aid] = {"file": rec.id, "to": to, "by": name, "done": False}
+        hub.approvals[aid] = {"file": rec.id, "to": to, "by": name, "done": False, "lang": lang, "also_mac": also_mac}
         hub.log.append("approval.requested", actor="hub", content={"approval": aid, "action": "send", "file": rec.id, "to": to})
         return {"status": "needs_approval", "approval": aid, "question": f"Send “{rec.title}” to {to}?",
-                "steps": steps + [{"t": "Sending a file needs your tap", "ok": None}]}
+                "steps": steps + [{"t": "Sending a file needs your tap", "ok": None}],
+                "reply": await new_reply("needs_approval", lang, also_mac, file=rec.id, to=to)}
 
     if hub.helper is None:
         hub.log.append("device.failed", actor="hub", content={"file": rec.id, "why": "no helper connected"})
-        return {"status": "no_helper", "steps": steps + [{"t": "No helper is connected on the Mac", "ok": False}]}
+        return {"status": "no_helper", "steps": steps + [{"t": "No helper is connected on the Mac", "ok": False}],
+                "reply": await new_reply("no_helper", lang, False)}
     cid, ftoken = uuid.uuid4().hex[:12], secrets.token_urlsafe(18)
     hub.file_tokens[ftoken] = rec.id
-    hub.commands[cid] = {"state": "sent", "detail": "Sent to the Mac", "file": rec.id, "proof": None}
+    hub.commands[cid] = {"state": "sent", "detail": "Sent to the Mac", "file": rec.id, "proof": None,
+                         "lang": lang, "also_mac": also_mac, "reply": None}
     hub.log.append("device.command", actor="hub", content={"command": cid, "do": "open_file", "file": rec.id})
     await hub.helper.send_json({"type": "open_file", "command_id": cid, "file_id": rec.id,
                                 "filename": rec.filename, "token": ftoken})
+    # the spoken reply comes with the final result ("Done. … is open."), not now
     return {"status": "sent", "command": cid, "steps": steps + [{"t": "Sent to the Mac", "ok": True}]}
 
 
@@ -156,7 +199,7 @@ def status(cid: str, request: Request, x_session: str | None = Header(default=No
     c = hub.commands.get(cid)
     if not c:
         raise HTTPException(404, "Unknown command")
-    return {"state": c["state"], "detail": c["detail"], "proof": c["proof"] is not None}
+    return {"state": c["state"], "detail": c["detail"], "proof": c["proof"] is not None, "reply": c["reply"]}
 
 
 @app.get("/api/proof/{cid}")
@@ -170,7 +213,7 @@ def proof(cid: str, request: Request, s: str | None = None):
 
 
 @app.post("/api/approve/{aid}")
-def approve(aid: str, request: Request, x_session: str | None = Header(default=None)):
+async def approve(aid: str, request: Request, x_session: str | None = Header(default=None)):
     who(request, x_session)
     a = hub.approvals.get(aid)
     if not a:
@@ -180,7 +223,66 @@ def approve(aid: str, request: Request, x_session: str | None = Header(default=N
         hub.log.append("approval.given", actor=a["by"], content={"approval": aid, "file": a["file"], "to": a["to"],
                                                                   "note": "demo: would send; nothing was emailed"},
                        key=f"approval:{aid}")
-    return {"status": "approved", "note": f"Approved. Demo only: logged “would send {BY_ID[a['file']].title} to {a['to']}”. Nothing was emailed."}
+        a["reply"] = await new_reply("approved", a.get("lang", "en"), a.get("also_mac", False))
+    return {"status": "approved", "reply": a.get("reply"),
+            "note": f"Approved. Demo only: logged “would send {BY_ID[a['file']].title} to {a['to']}”. Nothing was emailed."}
+
+
+@app.get("/api/reply/{rid}.m4a")
+async def reply_file(rid: str, request: Request, s: str | None = None):
+    # an <audio> element can't send headers, so the session comes as ?s=
+    who(request, s)
+    if rid not in hub.replies:
+        raise HTTPException(404, "Unknown reply")
+    r = await reply_audio(rid)
+    hub.log.append("reply.spoken", actor="hub", content={"reply": rid, "where": "device", "voice": r["note"]},
+                   key=f"spoken-device:{rid}")
+    return Response(r["audio"], media_type="audio/mp4", headers={"X-Voice": r["note"].encode("ascii", "ignore").decode()})
+
+
+# ---------------- the owner's voice sample (this Mac only, consent required) ----------------
+
+@app.get("/api/voice")
+def voice_info(request: Request, x_session: str | None = Header(default=None)):
+    who(request, x_session)
+    return {"sample": voice.SAMPLE.exists(), "magpie": voice.magpie_ready("en") or "on"}
+
+
+@app.post("/api/voice-sample")
+async def voice_sample(request: Request, consent: str = ""):
+    if not is_local(request.client.host if request.client else None):
+        raise HTTPException(403, "Record your voice on the Mac itself")
+    if consent != "my-own-voice":
+        raise HTTPException(400, "Tick “This is my own voice” first")
+    kind = (request.headers.get("content-type") or "").split(";")[0].strip().lower()
+    if kind not in AUDIO_TYPES:
+        raise HTTPException(415, "Send the recording as audio")
+    audio = await request.body()
+    if not 2000 < len(audio) < speech.MAX_BYTES:
+        raise HTTPException(400, "The recording is empty or too long")
+    RUN_DIR.mkdir(exist_ok=True)
+    src = RUN_DIR / f"voice-upload{AUDIO_TYPES[kind]}"
+    src.write_bytes(audio)
+    # NVIDIA asks for 3-5 s, 16-bit mono WAV at 22.05 kHz
+    r = await asyncio.to_thread(subprocess.run, ["ffmpeg", "-loglevel", "error", "-y", "-i", str(src), "-t", "5",
+                                                 "-ac", "1", "-ar", "22050", "-sample_fmt", "s16", str(voice.SAMPLE)],
+                                capture_output=True)
+    src.unlink(missing_ok=True)
+    if r.returncode != 0:
+        raise HTTPException(400, "Couldn't read that recording")
+    voice.SAMPLE.chmod(0o600)
+    hub.log.append("voice.sample_saved", actor=PEOPLE["layla"]["name"], content={"consent": "own voice, for replies"})
+    return {"saved": True}
+
+
+@app.delete("/api/voice-sample")
+def voice_sample_delete(request: Request):
+    if not is_local(request.client.host if request.client else None):
+        raise HTTPException(403, "Only on the Mac itself")
+    if voice.SAMPLE.exists():
+        voice.SAMPLE.unlink()
+        hub.log.append("voice.sample_deleted", actor=PEOPLE["layla"]["name"])
+    return {"deleted": True}
 
 
 AUDIO_TYPES = {"audio/webm": ".webm", "audio/ogg": ".ogg", "audio/mp4": ".mp4", "audio/mpeg": ".mp3",
@@ -221,6 +323,16 @@ def helper_file(file_id: str, request: Request, t: str = ""):
     return FileResponse(rec.path, media_type="application/pdf", filename=rec.filename)
 
 
+@app.get("/helper/reply/{rid}")
+async def helper_reply(rid: str, request: Request, t: str = ""):
+    if not is_local(request.client.host if request.client else None):
+        raise HTTPException(403, "Only the helper on this Mac can fetch replies")
+    if hub.reply_tokens.pop(t, None) != rid:  # one use only, and only for that reply
+        raise HTTPException(403, "Bad or used token")
+    r = await reply_audio(rid)
+    return Response(r["audio"], media_type="audio/mp4")
+
+
 @app.websocket("/helper/ws")
 async def helper_ws(ws: WebSocket):
     if not is_local(ws.client.host if ws.client else None) or ws.query_params.get("token") != hub.helper_token:
@@ -232,14 +344,23 @@ async def helper_ws(ws: WebSocket):
     try:
         while True:
             msg = await ws.receive_json()
+            if msg.get("type") == "spoken" and msg.get("reply_id") in hub.replies:
+                r = hub.replies[msg["reply_id"]]
+                hub.log.append("reply.spoken", actor="helper",
+                               content={"reply": msg["reply_id"], "where": "Mac speakers" if msg.get("ok") else "Mac (failed)",
+                                        "voice": r["note"]}, key=f"spoken-mac:{msg['reply_id']}")
+                continue
             if msg.get("type") != "result" or msg.get("command_id") not in hub.commands:
                 continue
             c = hub.commands[msg["command_id"]]
             if msg.get("proof_b64"):
                 c["proof"] = base64.b64decode(msg["proof_b64"])
             confirmed = bool(msg.get("ok")) and bool(msg.get("confirmed"))
-            c["state"] = "confirmed" if confirmed else ("unconfirmed" if msg.get("ok") else "failed")
+            state = "confirmed" if confirmed else ("unconfirmed" if msg.get("ok") else "failed")
+            if c.get("reply") is None:  # attach the reply BEFORE the state changes: the page stops polling then
+                c["reply"] = await new_reply(state, c.get("lang", "en"), c.get("also_mac", False), file=c["file"])
             c["detail"] = str(msg.get("detail", ""))[:200]
+            c["state"] = state
             hub.log.append("device.confirmed" if confirmed else "device.failed", actor="helper",
                            content={"command": msg["command_id"], "file": c["file"], "detail": c["detail"]},
                            key=f"result:{msg['command_id']}")
