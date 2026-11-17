@@ -27,7 +27,8 @@ from pathlib import Path
 from fastapi import FastAPI, Header, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, Response
 
-from . import devices, discover, speech, voice
+from . import devices, discover, phone_apps, speech, voice
+from .connectors import roborock_vac
 from .commands import parse
 from .devices import may_use
 from .replies import lang_of, reply
@@ -57,6 +58,7 @@ class Hub:
         self.tasks: set = set()                  # background jobs (speaking on the Mac), kept so they finish
         self.device_state: dict[str, bool] = {}  # last state each device reported (from the helper)
         self.found: dict[str, dict] = {}         # the last Wi-Fi scan: key -> what was found
+        self.robot_state: dict[str, dict] = {}   # last state each robot reported: state, battery, place
 
 
 hub = Hub()
@@ -156,6 +158,8 @@ async def run_command(said: str, person: str, device: str, key: str | None, choo
                    key=f"heard:{key}" if key else None)
     intent = parse(said)
     steps = [{"t": f"Heard “{said}”", "ok": True}]
+    if intent.action == "phone_app":
+        return await run_phone_app(intent, name, steps, lang, also_mac)
     if intent.kind:
         dev = devices.by_id(choose[4:]) if choose and choose.startswith("dev:") else intent.device
         return await run_device(intent, dev, person, steps, lang, also_mac, choose)
@@ -202,13 +206,27 @@ async def run_command(said: str, person: str, device: str, key: str | None, choo
     return {"status": "sent", "command": cid, "steps": steps + [{"t": "Sent to the Mac", "ok": True}]}
 
 
+async def run_phone_app(intent, name: str, steps: list, lang: str, also_mac: bool) -> dict:
+    """Open an app on the phone you spoke on. The phone opens it (after a tap); nothing is sent for you."""
+    title = phone_apps.APPS[intent.app][0]
+    url = phone_apps.link(intent.app, intent.message)
+    hub.log.append("phone.app_opened", actor=name, content={"app": intent.app, "with_text": "yes" if intent.message else "no"})
+    steps = steps + [{"t": f"Open {title} on this phone" + (" with your message typed (you press send)" if intent.message else ""),
+                      "ok": True}]
+    rep = await new_reply("phone_message" if intent.message else "phone_app", lang, also_mac, app=title)
+    return {"status": "open_on_phone", "app": title, "link": url, "steps": steps, "reply": rep}
+
+
 def say_action(action: str) -> str:
-    return {"volume_up": "volume up", "volume_down": "volume down", "app:youtube": "open YouTube",
+    return {"start": "start cleaning", "clean": "clean", "pause": "pause", "dock": "go home to charge", "goto": "go to",
+            "stop": "stop", "volume_up": "volume up", "volume_down": "volume down", "app:youtube": "open YouTube",
             "app:netflix": "open Netflix", "hdmi": "change input", "print": "print"}.get(action, f"switch {action}")
 
 
 async def run_device(intent, dev, person: str, steps: list, lang: str, also_mac: bool, choose: str | None) -> dict:
     name, action = PEOPLE[person]["name"], intent.action
+    if dev is None and action == "stop" and intent.kind == "robot" and intent.device_options:
+        return await stop_all(intent.device_options, person, steps, lang, also_mac)
     if dev is None:
         if len(intent.device_options) > 1:
             return {"status": "choose", "steps": steps + [{"t": f"{len(intent.device_options)} devices fit. Which one?", "ok": None}],
@@ -225,7 +243,15 @@ async def run_device(intent, dev, person: str, steps: list, lang: str, also_mac:
         return {"status": "refused", "steps": steps + [{"t": f"{name} is not allowed to use this device", "ok": False}],
                 "reply": await new_reply("refused_device", lang, also_mac, person=name, device=dev)}
     steps.append({"t": f"Allowed for {name} ({PEOPLE[person]['role']})", "ok": True})
-    rec = None
+    rec, place = None, intent.place
+    if dev.kind == "robot":
+        if action == "stop":  # stop goes first: it never waits for a tap and cancels any waiting robot approvals
+            cancel_waiting(dev.id)
+            return await send_device(dev, "stop", steps, lang, also_mac)
+        if intent.place_unknown:
+            return {"status": "not_found", "steps": steps + [{"t": f"{dev.name} has no room called “{intent.place_unknown}”", "ok": False}],
+                    "reply": await new_reply("unknown_place", lang, also_mac, device=dev, place=intent.place_unknown,
+                                             places=dev.place_names)}
     if action == "print":
         matches = [BY_ID[choose]] if choose in BY_ID else intent.matches
         if not matches:
@@ -241,30 +267,65 @@ async def run_device(intent, dev, person: str, steps: list, lang: str, also_mac:
             return {"status": "refused", "steps": steps + [{"t": f"{name} is not allowed to print this file", "ok": False}],
                     "reply": await new_reply("refused", lang, also_mac, person=name)}
         steps.append({"t": f"File: “{rec.title}”", "ok": True})
-    if dev.needs_tap:  # printing (paper, can't undo) and risky devices: a person taps Approve first, every time
+    if dev.needs_tap_for(action):  # printing, robots moving, risky devices: a person taps Approve first, every time
         aid = uuid.uuid4().hex[:10]
-        hub.approvals[aid] = {"device": dev.id, "action": action, "file": rec.id if rec else None, "by": name,
-                              "done": False, "lang": lang, "also_mac": also_mac}
+        hub.approvals[aid] = {"device": dev.id, "action": action, "file": rec.id if rec else None, "place": place,
+                              "by": name, "done": False, "lang": lang, "also_mac": also_mac}
         hub.log.append("approval.requested", actor="hub",
-                       content={"approval": aid, "action": say_action(action), "device": dev.id, **({"file": rec.id} if rec else {})})
-        question = f"Print “{rec.title}” on {dev.name}?" if rec else f"{say_action(action).capitalize()}: {dev.name}?"
-        why = "Printing uses paper and can't be undone: it needs your tap" if rec else "This device heats or moves: it needs your tap"
-        rep = await new_reply("approve_print", lang, also_mac, file=rec.id, device=dev) if rec else \
-            await new_reply("approve_device", lang, also_mac, device=dev, action=action)
+                       content={"approval": aid, "action": say_action(action), "device": dev.id,
+                                **({"file": rec.id} if rec else {}), **({"place": place} if place else {})})
+        if rec:
+            question, why = f"Print “{rec.title}” on {dev.name}?", "Printing uses paper and can't be undone: it needs your tap"
+            rep = await new_reply("approve_print", lang, also_mac, file=rec.id, device=dev)
+        elif dev.kind == "robot":
+            question = f"{say_action(action).capitalize()}{' the ' + place.lower() if place else ''}: {dev.name}?"
+            why = "The robot moves: it needs your tap (Stop never does)"
+            rep = await new_reply("approve_robot", lang, also_mac, device=dev, action=action, place=place or "")
+        else:
+            question, why = f"{say_action(action).capitalize()}: {dev.name}?", "This device heats or moves: it needs your tap"
+            rep = await new_reply("approve_device", lang, also_mac, device=dev, action=action)
         return {"status": "needs_approval", "approval": aid, "question": question,
                 "steps": steps + [{"t": why, "ok": None}], "reply": rep}
-    return await send_device(dev, action, steps, lang, also_mac)
+    return await send_device(dev, action, steps, lang, also_mac, place=place)
 
 
-async def send_device(dev, action: str, steps: list, lang: str, also_mac: bool, file: str | None = None) -> dict:
+def cancel_waiting(device_id: str) -> None:
+    for aid, a in hub.approvals.items():
+        if a.get("device") == device_id and not a["done"]:
+            a["done"], a["cancelled"] = True, True
+            hub.log.append("approval.cancelled", actor="hub", content={"approval": aid, "device": device_id,
+                                                                       "why": "stop was said"})
+
+
+async def stop_all(robots, person: str, steps: list, lang: str, also_mac: bool) -> dict:
+    """"Stop" with no robot named: every robot this person may use stops, now, with no tap."""
+    mine = [d for d in robots if may_use(person, d)]
+    if not mine:
+        return {"status": "refused", "steps": steps + [{"t": "You're not allowed to use these robots", "ok": False}],
+                "reply": await new_reply("refused_device", lang, also_mac, person=PEOPLE[person]["name"], device=robots[0])}
+    sent = []
+    for d in mine:
+        cancel_waiting(d.id)
+        sent.append(await send_device(d, "stop", [], lang, False))
+    cids = [x["command"] for x in sent if x.get("command")]
+    return {"status": "sent" if cids else "no_helper", "command": cids[0] if cids else None, "commands": cids,
+            "steps": steps + [{"t": f"Stop sent to {len(cids)} robot(s), no tap needed", "ok": True}],
+            "reply": await new_reply("stop_all", lang, also_mac)}
+
+
+async def send_device(dev, action: str, steps: list, lang: str, also_mac: bool, file: str | None = None,
+                      place: str | None = None) -> dict:
     if hub.helper is None:
         hub.log.append("device.failed", actor="hub", content={"device": dev.id, "why": "no helper connected"})
         return {"status": "no_helper", "steps": steps + [{"t": "No helper is connected on the Mac", "ok": False}],
                 "reply": await new_reply("no_helper", lang, False)}
     cid = uuid.uuid4().hex[:12]
     hub.commands[cid] = {"state": "sent", "detail": "Sent to the Mac", "device": dev.id, "kind": dev.kind,
-                         "action": action, "file": file, "proof": None, "lang": lang, "also_mac": also_mac, "reply": None}
+                         "action": action, "file": file, "place": place, "proof": None, "lang": lang,
+                         "also_mac": also_mac, "reply": None}
     msg = {"type": "device", "command_id": cid, "device_id": dev.id, "action": action}
+    if place:
+        msg["arg"] = place
     if file:  # printing: the helper downloads the file with a one-time token, as for opening
         ftoken = secrets.token_urlsafe(18)
         hub.file_tokens[ftoken] = file
@@ -278,6 +339,15 @@ async def send_device(dev, action: str, steps: list, lang: str, also_mac: bool, 
 def device_outcome(c: dict, msg: dict, confirmed: bool) -> tuple[str, dict]:
     """Which sentence the agent says after a device result."""
     kind, action, kw = c["kind"], c["action"], {"device": c["device"]}
+    if kind == "robot":
+        kw["place"] = c.get("place") or msg.get("target") or ""
+        if not msg.get("ok"):
+            return ("robot_problem", kw | {"problem": msg["problem"]}) if msg.get("problem") else ("robot_failed", kw)
+        if not confirmed:
+            if action == "goto" and msg.get("state") == "idle":
+                return "robot_stopped_early", kw
+            return ("robot_on_way", kw) if msg.get("state") == "moving" else ("robot_unsure", kw)
+        return f"robot_{action}", kw
     if not msg.get("ok"):
         if kind == "printer":
             problems = msg.get("problems") or []
@@ -305,9 +375,18 @@ def device_outcome(c: dict, msg: dict, confirmed: bool) -> tuple[str, dict]:
 def devices_info(request: Request, x_session: str | None = Header(default=None)):
     who(request, x_session)
     pretend = devices.plug_kind() == "pretend"
-    return [{"id": d.id, "name": d.name, "room": d.room, "kind": d.kind, "model": d.model,
-             "on": hub.device_state.get(d.id), "pretend": d.id == devices.LAMP.id and pretend,
-             "roles": list(d.roles)} for d in devices.current()]
+    from .connectors.robots import plain
+    out = []
+    for d in devices.current():
+        row = {"id": d.id, "name": d.name, "room": d.room, "kind": d.kind, "model": d.model,
+               "on": hub.device_state.get(d.id), "pretend": (d.id == devices.LAMP.id and pretend) or d.id in devices.PRETENDS,
+               "roles": list(d.roles)}
+        if d.kind == "robot":
+            st = hub.robot_state.get(d.id, {})
+            row |= {"sub": d.sub, "places": list(d.place_names), "state": plain(st.get("state")) if st else None,
+                    "battery": st.get("battery"), "place": st.get("place")}
+        out.append(row)
+    return out
 
 
 def mac_only(request: Request) -> None:
@@ -350,6 +429,108 @@ async def add_device(request: Request):
     return out
 
 
+ROBOROCK_LOGIN = RUN_DIR / "roborock.json"
+EMAIL = __import__("re").compile(r"^[^@\s]{1,64}@[^@\s]{1,190}\.[a-z]{2,}$", __import__("re").IGNORECASE)
+
+
+def vacuum_rows(vacs: list[dict]) -> list[dict]:
+    """Roborock vacuums as rows the page can add, like scan results."""
+    rows = []
+    for v in vacs:
+        k = discover.key_for("robot", "roborock:" + v["duid"])
+        rows.append({"key": k, "kind": "robot", "sub": "vacuum", "uid": v["duid"], "label": v["label"], "model": v["model"],
+                     "address": "Roborock account", "places": [[name] for _, name in v["rooms"]],
+                     "spots": [[name, seg] for seg, name in v["rooms"]], "connector": True})
+    hub.found.update({r["key"]: r for r in rows})
+    added = {d.id for d in devices.load_added()}
+    return [{k: v for k, v in r.items() if k not in ("uid", "spots")} | {"added": r["key"] in added} for r in rows]
+
+
+@app.post("/api/roborock/code")
+async def roborock_code(request: Request):
+    """Step 1: Roborock emails a code to the account's address."""
+    mac_only(request)
+    email = str((await request.json()).get("email", "")).strip()
+    if not EMAIL.match(email):
+        raise HTTPException(400, "Type the email you use in the Roborock app")
+    try:
+        await asyncio.to_thread(roborock_vac.request_code, email)
+    except roborock_vac.VacuumError as e:
+        raise HTTPException(502, str(e))
+    hub.roborock_email = email
+    return {"status": "code_sent"}
+
+
+@app.post("/api/roborock/login")
+async def roborock_login(request: Request):
+    """Step 2: the emailed code logs in; the vacuums on the account are listed to add."""
+    mac_only(request)
+    code = str((await request.json()).get("code", "")).strip()
+    email = getattr(hub, "roborock_email", None)
+    if not email or not code.isdigit():
+        raise HTTPException(400, "Ask for a code first, then type the digits from the email")
+    try:
+        await asyncio.to_thread(roborock_vac.login, email, code, ROBOROCK_LOGIN)
+        vacs = await asyncio.to_thread(roborock_vac.list_vacuums, ROBOROCK_LOGIN)
+    except roborock_vac.VacuumError as e:
+        raise HTTPException(502, str(e))
+    hub.log.append("robot.login", actor="owner", content={"brand": "Roborock", "vacuums": str(len(vacs))})
+    return vacuum_rows(vacs)
+
+
+@app.post("/api/roborock/list")
+async def roborock_list(request: Request):
+    mac_only(request)
+    try:
+        return vacuum_rows(await asyncio.to_thread(roborock_vac.list_vacuums, ROBOROCK_LOGIN))
+    except roborock_vac.VacuumError as e:
+        raise HTTPException(502, str(e))
+
+
+def parse_spots(text: str) -> list[list]:
+    """'Meeting room: 4, 2, 0' per line -> [[name, x, y, heading]]."""
+    spots = []
+    for line in str(text or "").splitlines():
+        if not line.strip():
+            continue
+        name, _, nums = line.partition(":")
+        try:
+            vals = [float(v) for v in nums.replace(" ", "").split(",")]
+        except ValueError:
+            raise HTTPException(400, f"Spot “{line.strip()[:40]}”: write it as  Name: x, y, heading")
+        if not devices.clean(name, 30) or len(vals) not in (2, 3):
+            raise HTTPException(400, f"Spot “{line.strip()[:40]}”: write it as  Name: x, y, heading")
+        spots.append([devices.clean(name, 30), vals[0], vals[1], vals[2] if len(vals) == 3 else 0.0])
+    if not spots:
+        raise HTTPException(400, "Add at least one spot, e.g.  Meeting room: 4, 2, 0")
+    return spots[:20]
+
+
+@app.post("/api/devices/add-ros")
+async def add_ros(request: Request):
+    """Add a ROS 2 robot by its rosbridge address and named spots (Mac only)."""
+    mac_only(request)
+    b = await request.json()
+    address = str(b.get("address", "")).strip()
+    if not __import__("re").fullmatch(r"[A-Za-z0-9.-]{1,100}", address):
+        raise HTTPException(400, "Type the robot's IP address or host name")
+    port = int(b.get("port") or 9090)
+    if not 1 <= port <= 65535:
+        raise HTTPException(400, "Port must be a number like 9090")
+    spots = parse_spots(b.get("spots", ""))
+    found = {"key": discover.key_for("robot", f"ros:{address}:{port}"), "kind": "robot", "sub": "ros",
+             "label": "ROS robot", "model": "ROS 2", "address": address, "port": port,
+             "places": [[s[0]] for s in spots], "spots": spots}
+    try:
+        dev = devices.from_found(found, b.get("name", "") or "ROS robot", b.get("room", ""), b.get("roles") or [])
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    devices.save_added([d for d in devices.load_added() if d.id != dev.id] + [dev])
+    hub.log.append("device.added", actor="owner", content={"device": dev.id, "kind": "robot (ROS)", "name": dev.name,
+                                                           "room": dev.room, "roles": ", ".join(dev.roles)})
+    return {"status": "added", "device": dev.id}
+
+
 @app.delete("/api/devices/{device_id}")
 def remove_device(device_id: str, request: Request):
     mac_only(request)
@@ -358,6 +539,7 @@ def remove_device(device_id: str, request: Request):
         raise HTTPException(404, "Not an added device")
     devices.save_added(left)
     (devices.RUN_DIR / f"tv-{device_id}.token").unlink(missing_ok=True)
+    (devices.RUN_DIR / f"ros-{device_id}.json").unlink(missing_ok=True)
     hub.device_state.pop(device_id, None)
     hub.log.append("device.removed", actor="owner", content={"device": device_id})
     return {"status": "removed"}
@@ -390,6 +572,9 @@ async def approve(aid: str, request: Request, x_session: str | None = Header(def
     if not a:
         raise HTTPException(404, "Unknown approval")
     if "device" in a:
+        if a.get("cancelled"):
+            return {"status": "cancelled", "then": "cancelled", "note": "Cancelled: Stop was said before you approved",
+                    "steps": [{"t": "Cancelled: Stop was said before you approved", "ok": False}]}
         if a["done"]:
             return a["answer"] | {"repeat": True}
         a["done"] = True
@@ -399,7 +584,7 @@ async def approve(aid: str, request: Request, x_session: str | None = Header(def
         if dev is None:
             raise HTTPException(410, "That device was removed")
         a["answer"] = await send_device(dev, a["action"], [{"t": "Approved by you", "ok": True}],
-                                        a["lang"], a["also_mac"], file=a.get("file"))
+                                        a["lang"], a["also_mac"], file=a.get("file"), place=a.get("place"))
         return a["answer"] | {"status": "approved", "then": a["answer"]["status"]}
     if not a["done"]:
         a["done"] = True
@@ -542,6 +727,9 @@ async def helper_ws(ws: WebSocket):
             state = "confirmed" if confirmed else ("unconfirmed" if msg.get("ok") else "failed")
             if "device" in c and isinstance(msg.get("state"), bool):
                 hub.device_state[c["device"]] = msg["state"]
+            if c.get("kind") == "robot" and isinstance(msg.get("state"), str):
+                hub.robot_state[c["device"]] = {"state": msg["state"], "battery": msg.get("battery"),
+                                                "place": msg.get("place") or msg.get("target")}
             if c.get("reply") is None:  # attach the reply BEFORE the state changes: the page stops polling then
                 if "device" in c:
                     outcome, kw = device_outcome(c, msg, confirmed)

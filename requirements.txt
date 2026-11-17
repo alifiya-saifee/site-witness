@@ -11,3 +11,4 @@ pillow==13.0.0
 samsungtvws==3.0.7
 wakeonlan==4.0.0
 zeroconf==0.154.0
+python-roborock==7.23.2

@@ -54,7 +54,33 @@ TEXT = {
     "print_waiting": ("It's at the printer, but it hasn't finished yet.", "أُرسل إلى الطابعة، لكنها لم تنتهِ بعد."),
     "printer_problem": ("The printer says: {problem}.", "الطابعة تقول: {problem}."),
     "print_failed": ("Sorry, the printer couldn't print it.", "عذرًا، لم تتمكن الطابعة من الطباعة."),
+    # phone apps (you always press send yourself)
+    "phone_app":   ("Tap Open {app}.", "اضغط فتح {app}."),
+    "phone_message": ("Tap Open WhatsApp, pick the chat, then press send yourself.",
+                      "اضغط فتح واتساب، اختر المحادثة، ثم اضغط إرسال بنفسك."),
+    # robots
+    "approve_robot": ("{Robot_action} with {device}? Tap Approve.", "هل أنفّذ: {robot_action}؟ ({device}) اضغط موافقة."),
+    "robot_start": ("Done. {Device} is cleaning.", "تم. بدأ التنظيف ({device})."),
+    "robot_clean": ("Done. {Device} is cleaning the {place}.", "تم. جارٍ تنظيف {place} ({device})."),
+    "robot_pause": ("Paused.", "توقف مؤقتًا."),
+    "robot_stop":  ("Stopped.", "توقف."),
+    "robot_dock":  ("It's going back to charge.", "يعود الآن للشحن."),
+    "robot_goto":  ("{Device} is at the {place}.", "{device} وصل إلى {place}."),
+    "robot_on_way": ("{Device} is on its way to the {place}.", "{device} في الطريق إلى {place}."),
+    "robot_stopped_early": ("{Device} stopped before getting to the {place}.", "توقف {device} قبل الوصول إلى {place}."),
+    "robot_unsure": ("I sent it, but {device} didn't confirm it.", "أرسلتُ الأمر، لكن لم يصل تأكيد من {device}."),
+    "robot_problem": ("{Device} says: {problem}.", "رسالة من {device}: {problem}."),
+    "robot_failed": ("Sorry, I couldn't reach {device}.", "عذرًا، لم أتمكن من الوصول إلى {device}."),
+    "unknown_place": ("I don't know a room called {place}. Rooms: {places}.", "لا أعرف غرفة اسمها {place}. الغرف: {places}."),
+    "stop_all":    ("Stopping all the robots.", "أوقفتُ كل الروبوتات."),
 }
+
+ROBOT_ACTION_EN = {"start": "Start cleaning", "clean": "Clean the {place}", "pause": "Pause", "dock": "Send it home to charge",
+                   "goto": "Go to the {place}", "stop": "Stop"}
+ROBOT_ACTION_AR = {"start": "بدء التنظيف", "clean": "تنظيف {place}", "pause": "إيقاف مؤقت", "dock": "العودة للشحن",
+                   "goto": "الذهاب إلى {place}", "stop": "إيقاف"}
+PLACE_AR = {"Kitchen": "المطبخ", "Living room": "غرفة المعيشة", "Office": "المكتب", "Meeting room": "غرفة الاجتماعات",
+            "Reception": "الاستقبال", "Dock": "محطة الشحن"}
 
 KIND_EN = {"plug": "lamp", "tv": "TV", "printer": "printer"}
 KIND_AR = {"plug": "المصباح", "tv": "التلفزيون", "printer": "الطابعة"}
@@ -78,18 +104,25 @@ def cap(text: str) -> str:
 
 def reply(outcome: str, lang: str, *, file: str | None = None, person: str = "", to: str = "", n: int = 2,
           device=None, action: str = "on", kind: str = "", before="", after="", app: str = "",
-          problem: str = "") -> str:
+          problem: str = "", place: str = "", places=()) -> str:
     """device: a Device or a device id. Numbers and names are filled in; nothing is left as {…}."""
     en, ar = TEXT[outcome]
     dev = device_list.by_id(device) if isinstance(device, str) else device
     if lang == "ar":
         name = SPOKEN[file][1] if file else ""
         problems = "، ".join(PROBLEM_AR.get(p.strip(), p.strip()) for p in problem.split(",")) if problem else ""
+        place_ar = PLACE_AR.get(place, place)
         return ar.format(file=name, File=name, person=ARABIC_NAMES.get(person, person), to=ARABIC_NAMES.get(to, to),
                          n=n, device=dev.name_ar if dev else "الجهاز", action=ARABIC_ACTION.get(action, action),
                          kind=KIND_AR.get(kind, kind), before=before, after=after,
-                         app={"YouTube": "يوتيوب", "Netflix": "نتفلكس"}.get(app, app), problem=problems)
+                         app={"YouTube": "يوتيوب", "Netflix": "نتفلكس", "WhatsApp": "واتساب",
+                              "Google Maps": "خرائط جوجل", "Phone": "الهاتف"}.get(app, app), problem=problems,
+                         place=place_ar, places="، ".join(PLACE_AR.get(x, x) for x in places),
+                         robot_action=ROBOT_ACTION_AR.get(action, action).format(place=place_ar))
     name = SPOKEN[file][0] if file else ""
     dname = dev.name if dev else "the device"
+    place_en = place.lower() if place else ""
     return en.format(file=name, File=cap(name), person=person, to=to, n=n, device=dname, Device=cap(dname),
-                     action=action, kind=KIND_EN.get(kind, kind), before=before, after=after, app=app, problem=problem)
+                     action=action, kind=KIND_EN.get(kind, kind), before=before, after=after, app=app, problem=problem,
+                     place=place_en, places=", ".join(places),
+                     Robot_action=ROBOT_ACTION_EN.get(action, action).format(place=place_en))

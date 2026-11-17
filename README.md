@@ -83,4 +83,28 @@ committed). Once a real device is added, the pretend lamp goes away.
 
 The helper only runs the actions each kind allows (for example a plug has no volume) on devices in the list.
 
+## Apps on your phone
+
+Say “open WhatsApp” / «افتح واتساب» (or YouTube, Google Maps) and the page shows a big **Open WhatsApp** button:
+one tap opens the app on the phone you spoke on. “WhatsApp message: I’ve sent the report” opens WhatsApp with that
+text typed. **You pick the chat and press send yourself**: nothing is ever sent for you, and no numbers or contacts
+are stored. (Phones only let a page open an app right after a tap, which is why there is a button.) “open YouTube”
+goes to the TV once a TV is added, unless you say “on my phone”.
+
+## Robots
+
+| Robot | Say | Checked by |
+|---|---|---|
+| Roborock vacuum | “clean the kitchen”, “start the vacuum”, “pause”, “send the vacuum home”, «نظف المطبخ» | the vacuum’s own status (cleaning / returning home / charging, battery, errors) |
+| ROS 2 robot (rosbridge) | “robot go to the meeting room”, “go home”, «روح غرفة الاجتماعات» | Nav2 says it arrived, or its own position is within 0.5 m of the spot |
+
+- **Every movement waits for your Approve tap. “Stop” / «وقف» never does**, goes first, and cancels any waiting
+  robot approval. “Stop” with no robot named stops every robot. Each robot row has a red **Stop** button.
+- Until you add real ones, a **pretend vacuum** and a **pretend office robot** stand in (labelled “pretend”).
+- **Add a Roborock** (Mac page → Add a robot): type your Roborock app email, type the code Roborock emails you, pick
+  the vacuum. This logs in to Roborock’s cloud; only the login token is kept, in `run/roborock.json` (never your
+  password, never committed). Its rooms come from the Roborock app.
+- **Add a ROS 2 robot**: its IP, the rosbridge port (9090), and its spots, one per line: `Meeting room: 4, 2, 0`
+  (x, y in metres on its map, heading in radians). It needs `rosbridge_server` and Nav2 running on the robot.
+
 Tests: `.venv/bin/pytest -q`

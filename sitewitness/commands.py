@@ -9,6 +9,9 @@
 - "turn off the TV", "volume up", "mute", "open YouTube" -> the TV (only once a TV has been added on the Mac)
 - "print the Al Noor report" / «اطبع تقرير النور»        -> print that file on the added printer (always a tap)
 - A device word with no such device added -> "no TV/printer is added yet", never a file.
+- "open WhatsApp" / «افتح واتساب» / "WhatsApp message: …" -> open that app on the phone you spoke on
+  ("open YouTube" goes to the TV when a TV is added, unless you say "on my phone").
+- "clean the kitchen", "robot go to the meeting room", "stop", «نظف المطبخ», «وقف» -> a robot.
 """
 from __future__ import annotations
 
@@ -16,6 +19,7 @@ import re
 from dataclasses import dataclass, field
 
 from . import devices as device_list
+from . import phone_apps
 from .devices import KIND_WORDS, Device
 from .records import RECORDS, Record
 
@@ -28,6 +32,13 @@ VOLUME_DOWN = ("volume down", "turn down", "quieter", "softer", "lower the volum
                "اخفض الصوت", "وطي الصوت", "قلل الصوت", "اخفض", "نزل الصوت")
 MUTE_WORDS = ("mute", "unmute", "اكتم", "كتم", "اكتم الصوت")
 HDMI_WORDS = ("hdmi", "input", "source", "المدخل")
+ROBOT_PAUSE = ("pause", "وقف مؤقت", "إيقاف مؤقت", "ايقاف مؤقت", "استراحة")
+ROBOT_STOP = ("stop", "halt", "وقف", "توقف", "اوقف", "أوقف", "قف")
+ROBOT_DOCK = ("go home", "home", "dock", "charge", "go back", "return home", "back to base", "البيت", "ارجع", "اشحن", "عود", "ارجع للشحن")
+ROBOT_GOTO = ("go to", "drive to", "move to", "head to", "come to", "روح", "اذهب", "توجه", "روح الى", "روح إلى", "اذهب الى", "اذهب إلى")
+ROBOT_CLEAN = ("clean", "vacuum", "hoover", "نظف", "كنس")
+ROBOT_START = ("start", "begin", "ابدأ", "ابدا", "شغل")
+FILLER = {"the", "a", "to", "please", "pls", "robot", "vacuum", "hoover", "room", "and", "ال", "من", "فضلك", "الروبوت"}
 APP_WORDS = {"app:youtube": ("youtube", "you tube", "يوتيوب", "اليوتيوب"), "app:netflix": ("netflix", "نتفلكس", "نتفليكس")}
 
 
@@ -50,6 +61,10 @@ class Intent:
     device: Device | None = None
     kind: str | None = None                                       # plug | tv | printer, when a device is meant
     device_options: list[Device] = field(default_factory=list)   # several devices fit: ask which one
+    place: str | None = None          # robots: the room or spot meant
+    place_unknown: str | None = None  # robots: a place name the robot doesn't know
+    app: str | None = None            # phone apps: which app
+    message: str | None = None        # WhatsApp: text to have ready (you still press send)
 
 
 def any_of(text: str, words) -> bool:
@@ -78,8 +93,13 @@ def device_intent(text: str, devs) -> Intent | None:
         return Intent(action="print", text=text, kind="printer", matches=match(text),
                       device=printers[0] if len(printers) == 1 else None, device_options=printers)
     tv_only = tv_action(text)
-    by_name = [d for d in devs if any_of(text, d.words)]  # a device's own name ("the oven") or its kind's words
-    kinds = list(dict.fromkeys([d.kind for d in by_name] + [k for k, words in KIND_WORDS.items() if any_of(text, words)]))
+    by_name = [d for d in devs if any_of(text, d.words)]  # a device's own name ("the oven"), or a robot's room
+    kinds = list(dict.fromkeys([k for k, words in KIND_WORDS.items() if any_of(text, words)] + [d.kind for d in by_name]))
+    if not kinds and any_of(text, ROBOT_STOP + ROBOT_PAUSE + ROBOT_DOCK + ROBOT_CLEAN + ROBOT_GOTO) \
+            and any(d.kind == "robot" for d in devs):
+        kinds = ["robot"]  # "stop!" or "clean the bathroom" on its own means the robot
+    if kinds and kinds[0] == "robot":
+        return robot_intent(text, [d for d in devs if d.kind == "robot"])
     if tv_only and "tv" not in kinds:
         kinds.append("tv")
     if not kinds:
@@ -96,9 +116,91 @@ def device_intent(text: str, devs) -> Intent | None:
                   device_options=fits)
 
 
+def robot_verb(text: str) -> str | None:
+    if any_of(text, ROBOT_PAUSE):
+        return "pause"
+    if any_of(text, ROBOT_STOP + OFF_WORDS):
+        return "stop"
+    if any_of(text, ROBOT_DOCK):
+        return "dock"
+    if any_of(text, ROBOT_GOTO):
+        return "goto"
+    if any_of(text, ROBOT_CLEAN):
+        return "clean"
+    if any_of(text, ROBOT_START + ("on", "turn on", "switch on")):
+        return "start"
+    return None
+
+
+def after_verb(text: str, verbs) -> str:
+    """The words after "clean" / "go to", without filler: the place someone named."""
+    for v in sorted(verbs, key=len, reverse=True):
+        key = f" {normalise(v).strip()} "
+        if key in text:
+            rest = text.split(key, 1)[1]
+            return " ".join(w for w in rest.split() if w not in FILLER).strip()
+    return ""
+
+
+def robot_intent(text: str, robots) -> Intent:
+    verb = robot_verb(text) or "start"
+    if len(robots) > 1 and any_of(text, ("vacuum", "hoover", "roborock", "المكنسة", "مكنسة")):
+        robots = [d for d in robots if d.sub == "vacuum"] or robots
+    if verb == "stop" and len(robots) > 1 and not any_of(text, [w for d in robots for w in d.name.lower().split()
+                                                               if w not in KIND_WORDS["robot"] + ("the",)]):
+        return Intent(action="stop", text=text, kind="robot", device=None, device_options=list(robots))  # stop them all
+    place_of = {d.id: next((p[0] for p in d.places if any_of(text, p)), None) for d in robots}
+    fits = robots
+    if len(fits) > 1:
+        named = [d for d in fits if any_of(text, [w for w in d.name.lower().replace("the ", "", 1).split()
+                                                 if w not in KIND_WORDS["robot"]])]
+        with_place = [d for d in fits if place_of[d.id]]
+        can = [d for d in fits if ("clean" if verb in ("clean", "start", "pause") else verb) in d.actions
+               or (verb == "goto" and "clean" in d.actions and place_of[d.id])]
+        fits = named or with_place or can or fits
+    dev = fits[0] if len(fits) == 1 else None
+    place, unknown = (place_of.get(dev.id) if dev else None), None
+    action = verb
+    if dev:
+        if verb in ("clean", "goto"):
+            action = "clean" if "clean" in dev.actions else "goto"
+            if action == "clean" and not place:
+                action = "start"  # "clean" with no room: clean everything
+            if action == "goto" and place == "Dock":
+                action = "dock"
+            if not place and action in ("clean", "goto"):
+                unknown = after_verb(text, ROBOT_CLEAN + ROBOT_GOTO) or "?"
+            if verb == "clean" and not place:
+                rest = after_verb(text, ROBOT_CLEAN)
+                if rest:
+                    unknown, action = rest, "clean"
+        elif verb == "start" and "start" not in dev.actions:
+            action = "goto"
+            unknown = after_verb(text, ROBOT_GOTO) or "?"
+    return Intent(action=action, text=text, kind="robot", device=dev, device_options=fits, place=place,
+                  place_unknown=unknown)
+
+
+def phone_intent(said: str, text: str, devs) -> Intent | None:
+    app = next((k for k, a in phone_apps.APPS.items() if any_of(text, a[3])), None)
+    if not app:
+        return None
+    on_phone = any_of(text, phone_apps.ON_PHONE)
+    if app == "youtube" and not on_phone and any(d.kind == "tv" for d in devs):
+        return None  # "open YouTube" means the TV once there is one
+    if app == "maps" and not (on_phone or any_of(text, OPEN_WORDS)):
+        return None
+    return Intent(action="phone_app", text=text, app=app,
+                  message=phone_apps.message_text(said) if app == "whatsapp" else None)
+
+
 def parse(said: str, devs=None) -> Intent:
     text = normalise(said)
-    found = device_intent(text, device_list.current() if devs is None else devs)
+    devs = device_list.current() if devs is None else devs
+    phone = phone_intent(said, text, devs)
+    if phone:
+        return phone
+    found = device_intent(text, devs)
     if found:  # a device word wins: "turn on the lamp" never opens a file
         return found
     action = "send" if any(has(text, w) for w in SEND_WORDS) else "open"

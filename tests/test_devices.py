@@ -83,9 +83,9 @@ def test_two_tvs_the_name_decides_or_it_asks():
 # ---- the device list ----
 
 def test_adding_saves_and_the_pretend_lamp_steps_aside():
-    assert devices.current() == (LAMP,)
+    assert [d.id for d in devices.current()] == ["room-lamp", *devices.PRETENDS]
     devices.save_added([tv()])
-    assert [d.id for d in devices.current()] == ["tv-0a1b2c3d"]  # a real device: no pretend lamp
+    assert [d.id for d in devices.current()] == ["tv-0a1b2c3d", *devices.PRETENDS]  # a real device: no pretend lamp
     assert devices.by_id("tv-0a1b2c3d").name == "the living room TV" and devices.by_id("tv-0a1b2c3d").mac
 
 
@@ -93,7 +93,7 @@ def test_tapo_lamp_stays_with_real_devices(monkeypatch):
     devices.save_added([tv()])
     for k, v in {"SW_PLUG": "tapo", "SW_PLUG_HOST": "h", "TAPO_USERNAME": "u", "TAPO_PASSWORD": "p"}.items():
         monkeypatch.setenv(k, v)
-    assert [d.id for d in devices.current()] == ["room-lamp", "tv-0a1b2c3d"]
+    assert [d.id for d in devices.current()][:2] == ["room-lamp", "tv-0a1b2c3d"]
 
 
 def test_from_found_rules():

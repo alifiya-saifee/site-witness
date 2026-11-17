@@ -38,6 +38,9 @@ from sitewitness import devices  # noqa: E402
 from sitewitness.connectors.ipp_printer import Printer, PrinterError  # noqa: E402
 from sitewitness.connectors.plug import PlugError, TapoPlug  # noqa: E402
 from sitewitness.connectors.samsung_tv import SamsungTV  # noqa: E402
+from sitewitness.connectors.robots import PretendRobot  # noqa: E402
+from sitewitness.connectors.roborock_vac import RoborockVacuum  # noqa: E402
+from sitewitness.connectors.ros_robot import RosRobot  # noqa: E402
 from sitewitness.records import BY_ID  # noqa: E402
 
 RUN_DIR = ROOT / "run"
@@ -98,7 +101,7 @@ def side_by_side(before: bytes, after: bytes) -> bytes:
 class Helper:
     def __init__(self, runner=run, fetch=download, opened_dir: Path = OPENED, wait: float = 6.0,
                  fetch_reply=download_reply, plug=None, settle: float = 1.5, tv_for=None, printer_for=None,
-                 device_list=None):
+                 device_list=None, robot_for=None):
         self.run, self.fetch, self.opened_dir, self.wait = runner, fetch, opened_dir, wait
         self.fetch_reply = fetch_reply
         self.plug = plug if plug is not None else devices.plug_from_env()
@@ -106,7 +109,16 @@ class Helper:
         self.tv_for = tv_for or (lambda d: SamsungTV(d.address, d.mac, RUN_DIR / f"tv-{d.id}.token"))
         self.printer_for = printer_for or (lambda d: Printer(d.address, d.path or "ipp/print"))
         self.device_list = device_list or devices.current  # read fresh each time: devices can be added or removed
+        self.robot_for = robot_for or self._robot_for
         self.used_tokens: set[str] = set()
+
+    @staticmethod
+    def _robot_for(d):
+        if d.id in devices.PRETENDS:
+            return PretendRobot(d.id, d.sub, d.places, RUN_DIR / "pretend-robots.json")
+        if d.sub == "vacuum":
+            return RoborockVacuum(d.uid, d.places, RUN_DIR / "roborock.json", segments={s[0]: int(s[1]) for s in d.spots})
+        return RosRobot(d.address, d.port or 9090, d.spots, RUN_DIR / f"ros-{d.id}.json")
 
     def photo(self) -> bytes | None:
         """One photo from the Mac camera (skips the first frames while the camera adjusts), or None."""
@@ -135,12 +147,21 @@ class Helper:
             return self.tv(dev, action, result)
         if dev.kind == "printer":
             return self.print_file(dev, msg, result)
+        if dev.kind == "robot":
+            return self.robot(dev, action, msg.get("arg"), result)
         return self.switch(dev, action, result)
 
     def tv(self, dev, action: str, result: dict) -> dict:
         r = self.tv_for(dev).do(action)
         keep = {k: r[k] for k in ("ok", "confirmed", "detail", "state", "before", "after", "muted", "app") if k in r}
         return result | keep
+
+    def robot(self, dev, action: str, place: str | None, result: dict) -> dict:
+        if action in ("clean", "goto") and place not in dev.place_names:
+            return result | {"detail": f"Refused: the robot has no room or spot called {place}"}
+        r = self.robot_for(dev).do(action, place if action in ("clean", "goto") else None)
+        keep = ("ok", "confirmed", "detail", "state", "battery", "place", "target", "problem")
+        return result | {k: r[k] for k in keep if k in r}
 
     def print_file(self, dev, msg: dict, result: dict) -> dict:
         rec = BY_ID.get(msg.get("file_id"))
@@ -300,13 +321,17 @@ async def main():
                     is_device = msg.get("type") == "device"
                     what = f"{msg.get('action')} on {msg.get('device_id')}" if is_device else f"open {msg.get('file_id')}"
                     print(f"  Diwan Helper: asked to {what}", flush=True)
-                    try:
-                        result = await asyncio.to_thread(helper.device if is_device else helper.open_file, msg)
-                    except Exception as e:  # never leave the hub waiting
-                        result = {"type": "result", "command_id": msg.get("command_id"), "ok": False,
-                                  "detail": f"Helper error: {type(e).__name__}"}
-                    print(f"  Diwan Helper: {result['detail']}", flush=True)
-                    await ws.send(json.dumps(result))
+
+                    # each command runs on its own, so "stop" is never stuck behind a robot that is still driving
+                    async def work(m=msg, is_device=is_device):
+                        try:
+                            result = await asyncio.to_thread(helper.device if is_device else helper.open_file, m)
+                        except Exception as e:  # never leave the hub waiting
+                            result = {"type": "result", "command_id": m.get("command_id"), "ok": False,
+                                      "detail": f"Helper error: {type(e).__name__}"}
+                        print(f"  Diwan Helper: {result['detail']}", flush=True)
+                        await ws.send(json.dumps(result))
+                    asyncio.create_task(work())
         except (OSError, Exception) as e:  # hub not up yet, or it restarted
             print(f"  Diwan Helper: hub not reachable ({type(e).__name__}); retrying in 2 s", flush=True)
             await asyncio.sleep(2)

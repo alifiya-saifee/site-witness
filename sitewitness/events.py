@@ -19,6 +19,9 @@ TYPES = {
     "device.added",        # a person added a device found on the Wi-Fi (name, room, who may use it)
     "device.removed",
     "network.scanned",     # the Mac listened for devices on the Wi-Fi (it controls nothing)
+    "approval.cancelled",  # a waiting approval was dropped (e.g. "stop" was said first)
+    "phone.app_opened",    # an app was opened on the phone that asked (after a tap; nothing sent for you)
+    "robot.login",         # the Roborock account was linked on the Mac (no email or token is logged)
     "file.not_found",      # nothing matched
     "file.ambiguous",      # several files matched; the person was asked which one
     "access.refused",      # the person may not open or send that file

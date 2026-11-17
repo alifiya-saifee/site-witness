@@ -64,6 +64,8 @@ header span{font-size:12px;color:var(--muted)}
 .found .row{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
 .found input[type=text]{flex:1;min-width:120px;background:transparent;border:1px solid var(--line-2);border-radius:8px;padding:7px 9px;color:var(--ink);font:inherit;font-size:14px}
 .found .tog{font-size:13px}
+.btn.stop{background:var(--bad);border-color:var(--bad);color:#fff;font-weight:700}
+.btn.app{display:block;text-align:center;text-decoration:none;margin-top:10px;font-size:17px;padding:14px}
 .tog{display:flex;gap:8px;align-items:center;font-size:14px;margin:4px 0}
 .tog input{width:18px;height:18px;accent-color:var(--gold)}
 .said{margin-top:10px;padding:10px 12px;border-radius:12px;background:var(--gold-soft);border:1px solid rgba(232,199,122,.35);font-size:14px}
@@ -116,6 +118,25 @@ header span{font-size:12px;color:var(--muted)}
       <p class="hint" id="scanhint"></p>
     </section>
 
+    <section class="card" id="robotcard" hidden>
+      <p class="k">Add a robot (this Mac only)</p>
+      <p class="hint" style="margin:0 0 6px"><b>Roborock vacuum.</b> Type the email you use in the Roborock app; Roborock emails you a code. This logs in to Roborock’s cloud; only the login token is kept on this Mac (never your password).</p>
+      <div class="ask"><input id="rremail" type="email" placeholder="you@example.com" aria-label="Roborock email" autocomplete="off"><button class="btn" type="button" id="rrcode">Email me a code</button></div>
+      <div class="ask" id="rrstep2" hidden style="margin-top:8px"><input id="rrcodein" inputmode="numeric" placeholder="Code from the email" aria-label="Code"><button class="btn primary" type="button" id="rrlogin">Log in</button></div>
+      <p class="hint" id="rrhint"></p>
+      <div id="rrfound"></div>
+      <p class="hint" style="margin:14px 0 6px"><b>ROS 2 robot</b> (with rosbridge running). Spots on its map, one per line: <code>Name: x, y, heading</code>.</p>
+      <div class="found" style="border:0;padding:0">
+        <div class="row"><input type="text" id="rosname" value="Office robot" aria-label="Name"><input type="text" id="rosroom" value="Office" aria-label="Room"></div>
+        <div class="row"><input type="text" id="rosaddr" placeholder="Robot IP, e.g. 192.168.1.50" aria-label="Robot address"><input type="text" id="rosport" value="9090" aria-label="rosbridge port" style="max-width:90px"></div>
+        <div class="row"><textarea id="rosspots" rows="3" aria-label="Spots" style="flex:1;background:transparent;border:1px solid var(--line-2);border-radius:8px;padding:7px 9px;color:var(--ink);font:inherit;font-size:14px">Meeting room: 4, 2, 0
+Reception: 0.5, 6, 1.57
+Dock: 0, 0, 0</textarea></div>
+        <div class="row"><label class="tog"><input type="checkbox" data-rosrole="owner" checked> owner</label><label class="tog"><input type="checkbox" data-rosrole="broker" checked> broker</label><label class="tog"><input type="checkbox" data-rosrole="visitor"> visitor</label><button class="btn primary" type="button" id="rosadd">Add</button></div>
+      </div>
+      <p class="hint" id="roshint"></p>
+    </section>
+
     <section class="card">
       <p class="k">Spoken replies</p>
       <label class="tog"><input type="checkbox" id="speakhere" checked> Say replies on this device</label>
@@ -154,7 +175,7 @@ header span{font-size:12px;color:var(--muted)}
 const $=s=>document.querySelector(s);
 const store={ get(k){ try{return localStorage.getItem(k);}catch(e){return null;} }, set(k,v){ try{localStorage.setItem(k,v);}catch(e){} } };
 let session=store.get('sw-session')||'', person=store.get('sw-person')||'layla', people=[], lastSaid='';
-const EXAMPLES=['open the Al Noor slides','open the report','send the Al Noor report to Karim','turn on the lamp','turn off the TV','volume up','open YouTube on the TV','print the Al Noor report','افتح عرض النور','اطفئ التلفزيون'];
+const EXAMPLES=['open the Al Noor slides','open the report','send the Al Noor report to Karim','turn on the lamp','turn off the TV','volume up','open YouTube on the TV','print the Al Noor report','open WhatsApp','WhatsApp message: I’ve sent the report','clean the kitchen','robot go to the meeting room','stop','افتح عرض النور','نظف المطبخ'];
 
 async function api(path,opts={}){
   let r;
@@ -270,28 +291,53 @@ function setupReplies(local){
 
 /* Scan my Wi-Fi (Mac only): list what was found; add one with a name, room and who may use it. */
 let isLocal=false;
+/* One list of things you can add (Wi-Fi scan, or the vacuums on a Roborock account): name, room, who may use it. */
+function renderFound(found, box, hint){
+  const what={tv:'TV',printer:'Printer',plug:'Smart plug',robot:'Robot vacuum'};
+  const defName=f=>f.kind==='tv'?'Living room TV':f.kind==='printer'?'Office printer':f.label;
+  const defRoom=f=>f.kind==='tv'?'Living room':f.kind==='robot'?'Home':'Office';
+  box.innerHTML=found.map((f,i)=>`<div class="found"><b>${esc(f.label)}</b><small style="display:block;color:var(--muted);font-size:12px">${f.connector?what[f.kind]:'No connector yet ('+esc((f.what||[]).join(', '))+')'}${f.model&&f.model!==f.label?' · '+esc(f.model):''} · ${esc(f.address)}${f.places&&f.places.length?' · rooms: '+esc(f.places.map(p=>p[0]).join(', ')):''}</small>${
+    f.added?'<p class="hint">Already added.</p>':f.connector?`<div class="row"><input type="text" data-n="${i}" value="${esc(defName(f))}" aria-label="Name"><input type="text" data-r="${i}" value="${defRoom(f)}" aria-label="Room"></div><div class="row">${['owner','broker','visitor'].map(r=>`<label class="tog"><input type="checkbox" data-role="${r}" data-i="${i}" ${r!=='visitor'?'checked':''}> ${r}</label>`).join('')}<button class="btn primary" type="button" data-add="${i}">Add</button></div>`:''}</div>`).join('');
+  box.querySelectorAll('[data-add]').forEach(b=>b.onclick=async()=>{
+    const i=b.dataset.add, f=found[i], name=box.querySelector(`[data-n="${i}"]`).value;
+    const roles=[...box.querySelectorAll(`[data-i="${i}"]:checked`)].map(x=>x.dataset.role);
+    b.disabled=true;
+    try{
+      const a=await api('/api/devices/add',{method:'POST',body:JSON.stringify({key:f.key,name,room:box.querySelector(`[data-r="${i}"]`).value,roles})});
+      hint.textContent=`Added “${name}”.`+(f.kind==='tv'?' Look at the TV now and accept “Allow” with the remote.':'');
+      if(a.pairing && a.pairing.status==='sent'){ $('#result').hidden=false; drawSteps(a.pairing.steps); follow(a.pairing.command, a.pairing.steps); }
+      refresh();
+    }catch(e){ hint.textContent='Couldn’t add it: '+e.message; b.disabled=false; }
+  });
+}
 function setupScan(){
   if(!isLocal) return;
-  $('#scancard').hidden=false;
+  $('#scancard').hidden=false; $('#robotcard').hidden=false;
   $('#scan').onclick=async()=>{
     $('#scan').disabled=true; $('#scanhint').textContent='Listening for about 6 seconds…'; $('#found').innerHTML='';
     let found; try{ found=await api('/api/scan',{method:'POST'}); }catch(e){ $('#scanhint').textContent='Scan failed: '+e.message; $('#scan').disabled=false; return; }
     $('#scan').disabled=false;
-    const what={tv:'TV',printer:'Printer',plug:'Smart plug'};
     $('#scanhint').textContent=found.length?`Found ${found.length}. Add only your own devices.`:'Nothing found. Is the device on and on this Wi-Fi?';
-    $('#found').innerHTML=found.map((f,i)=>`<div class="found"><b>${esc(f.label)}</b><small style="display:block;color:var(--muted);font-size:12px">${f.connector?what[f.kind]:'No connector yet ('+esc((f.what||[]).join(', '))+')'}${f.model&&f.model!==f.label?' · '+esc(f.model):''} · ${esc(f.address)}</small>${
-      f.added?'<p class="hint">Already added.</p>':f.connector?`<div class="row"><input type="text" id="n${i}" value="${esc(f.kind==='tv'?'Living room TV':f.kind==='printer'?'Office printer':f.label)}" aria-label="Name"><input type="text" id="r${i}" value="${f.kind==='tv'?'Living room':'Office'}" aria-label="Room"></div><div class="row">${['owner','broker','visitor'].map(r=>`<label class="tog"><input type="checkbox" data-role="${r}" data-i="${i}" ${r!=='visitor'?'checked':''}> ${r}</label>`).join('')}<button class="btn primary" type="button" data-add="${i}">Add</button></div>`:''}</div>`).join('');
-    $('#found').querySelectorAll('[data-add]').forEach(b=>b.onclick=async()=>{
-      const i=b.dataset.add, f=found[i];
-      const roles=[...document.querySelectorAll(`[data-i="${i}"]:checked`)].map(x=>x.dataset.role);
-      b.disabled=true;
-      try{
-        const a=await api('/api/devices/add',{method:'POST',body:JSON.stringify({key:f.key,name:$('#n'+i).value,room:$('#r'+i).value,roles})});
-        $('#scanhint').textContent=`Added “${$('#n'+i).value}”.`+(f.kind==='tv'?' Look at the TV now and accept “Allow” with the remote.':'');
-        if(a.pairing && a.pairing.status==='sent'){ $('#result').hidden=false; drawSteps(a.pairing.steps); follow(a.pairing.command, a.pairing.steps); }
-        refresh();
-      }catch(e){ $('#scanhint').textContent='Couldn’t add it: '+e.message; b.disabled=false; }
-    });
+    renderFound(found, $('#found'), $('#scanhint'));
+  };
+  /* Roborock: email → code from Roborock → pick the vacuum */
+  $('#rrcode').onclick=async()=>{
+    $('#rrhint').textContent='Asking Roborock to email you a code…';
+    try{ await api('/api/roborock/code',{method:'POST',body:JSON.stringify({email:$('#rremail').value})}); $('#rrhint').textContent='Check your email, then type the code.'; $('#rrstep2').hidden=false; $('#rrcodein').focus(); }
+    catch(e){ $('#rrhint').textContent=e.message; }
+  };
+  $('#rrlogin').onclick=async()=>{
+    $('#rrhint').textContent='Logging in and looking for your vacuums…';
+    try{ const vacs=await api('/api/roborock/login',{method:'POST',body:JSON.stringify({code:$('#rrcodein').value})});
+      $('#rrhint').textContent=vacs.length?`Found ${vacs.length} on your Roborock account.`:'No vacuums on that account.'; renderFound(vacs, $('#rrfound'), $('#rrhint')); }
+    catch(e){ $('#rrhint').textContent=e.message; }
+  };
+  /* ROS 2 robot: address + named spots */
+  $('#rosadd').onclick=async()=>{
+    const roles=[...document.querySelectorAll('[data-rosrole]:checked')].map(x=>x.dataset.rosrole);
+    try{ await api('/api/devices/add-ros',{method:'POST',body:JSON.stringify({name:$('#rosname').value,room:$('#rosroom').value,address:$('#rosaddr').value,port:$('#rosport').value,spots:$('#rosspots').value,roles})});
+      $('#roshint').textContent=`Added “${$('#rosname').value}”.`; refresh(); }
+    catch(e){ $('#roshint').textContent='Couldn’t add it: '+e.message; }
   };
 }
 function drawSteps(steps){
@@ -333,6 +379,11 @@ async function go(text, choose, lang){
       const done=r.steps.slice(0,-1).concat(a.steps||[{t:'Approved by you',ok:true},{t:a.note,ok:true}]);
       drawSteps(done); playReply(a.reply); if(a.then==='sent') follow(a.command, done); refresh(); };
   }
+  if(r.status==='open_on_phone'){
+    // phones only let a page open an app straight after a tap, so there is always a button; try at once too
+    $('#options').innerHTML=`<a class="btn primary app" href="${esc(r.link)}" target="_blank" rel="noopener">Open ${esc(r.app)}</a>`+(r.app==='WhatsApp'?'<p class="hint">You pick the chat and press send yourself. Nothing is sent for you.</p>':'');
+    if(navigator.userActivation&&navigator.userActivation.isActive){ try{ window.open(r.link,'_blank','noopener'); }catch(e){} }
+  }
   playReply(r.reply);
   if(r.status==='sent') follow(r.command, r.steps);
   refresh();
@@ -356,8 +407,9 @@ async function refresh(){
   try{
     const info=await api('/api/info'); $('#hdot').classList.toggle('on',info.helper); $('#hdot span').textContent=info.helper?'Mac helper connected':'Mac helper not connected';
     const devs=await api('/api/devices');
-    const icon={plug:'💡',tv:'📺',printer:'🖨️'};
-    $('#devices').innerHTML=devs.map(d=>`<div class="dev ${d.on?'on':''}"><span class="bulb" aria-hidden="true">${icon[d.kind]||'🔌'}</span><div class="grow"><b>${esc(d.name[0].toUpperCase()+d.name.slice(1))}</b>${d.pretend?' <span class="sample">pretend</span>':''}<small>${esc(d.room)}${d.model?' · '+esc(d.model):''} · ${d.kind==='printer'?'prints after your tap':d.on===true?'on':d.on===false?'off':'not used yet'} · ${esc(d.roles.join(', '))}</small></div>${isLocal&&!d.pretend&&d.id!=='room-lamp'?`<button class="btn" type="button" data-rm="${esc(d.id)}">Remove</button>`:''}</div>`).join('');
+    const icon={plug:'💡',tv:'📺',printer:'🖨️',robot:'🤖'};
+    $('#devices').innerHTML=devs.map(d=>`<div class="dev ${d.on?'on':''}"><span class="bulb" aria-hidden="true">${icon[d.kind]||'🔌'}</span><div class="grow"><b>${esc(d.name[0].toUpperCase()+d.name.slice(1))}</b>${d.pretend?' <span class="sample">pretend</span>':''}<small>${esc(d.room)}${d.model&&d.model!=='pretend'?' · '+esc(d.model):''} · ${d.kind==='robot'?esc(d.state||'not used yet')+(d.place?' · at '+esc(d.place):'')+(d.battery!=null?' · 🔋 '+d.battery+'%':'')+' · '+esc((d.sub==='vacuum'?'rooms: ':'spots: ')+d.places.join(', ')):d.kind==='printer'?'prints after your tap':d.on===true?'on':d.on===false?'off':'not used yet'} · ${esc(d.roles.join(', '))}</small></div>${d.kind==='robot'?`<button class="btn stop" type="button" data-stop="${esc(d.name)}" title="Stops at once, no tap needed">Stop</button>`:''}${isLocal&&!d.pretend&&d.id!=='room-lamp'?`<button class="btn" type="button" data-rm="${esc(d.id)}">Remove</button>`:''}</div>`).join('');
+    $('#devices').querySelectorAll('[data-stop]').forEach(b=>b.onclick=()=>go('stop '+b.dataset.stop));
     $('#devices').querySelectorAll('[data-rm]').forEach(b=>b.onclick=async()=>{ await api('/api/devices/'+b.dataset.rm,{method:'DELETE'}); refresh(); });
     $('#devhint').textContent=devs.some(d=>d.pretend)?'No real device is added yet, so this is a pretend lamp on the screen. On the Mac, use “Scan my Wi-Fi” to add your TV or printer.':'Only these devices can be controlled, and only by the people shown.';
     const ev=await api('/api/events');
