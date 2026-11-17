@@ -72,6 +72,12 @@ TEXT = {
     "robot_problem": ("{Device} says: {problem}.", "رسالة من {device}: {problem}."),
     "robot_failed": ("Sorry, I couldn't reach {device}.", "عذرًا، لم أتمكن من الوصول إلى {device}."),
     "unknown_place": ("I don't know a room called {place}. Rooms: {places}.", "لا أعرف غرفة اسمها {place}. الغرف: {places}."),
+    "search_found": ("I found {n} files about {q}. Which one?", "وجدت {n} ملفات عن {q}. أيّها تقصد؟"),
+    "search_one":  ("I found one file about {q}: {file}.", "وجدت ملفًا واحدًا عن {q}: {file}."),
+    "search_none": ("I couldn't find a file mentioning {q}.", "لم أجد ملفًا يذكر {q}."),
+    "no_folder":   ("No folder is shared for searching yet. Share one on the Mac.",
+                    "لا يوجد مجلد مشترك للبحث بعد. شارك مجلدًا من الماك."),
+    "file_gone":   ("That file isn't in the shared folder any more.", "هذا الملف لم يعد في المجلد المشترك."),
     "stop_all":    ("Stopping all the robots.", "أوقفتُ كل الروبوتات."),
 }
 
@@ -104,12 +110,12 @@ def cap(text: str) -> str:
 
 def reply(outcome: str, lang: str, *, file: str | None = None, person: str = "", to: str = "", n: int = 2,
           device=None, action: str = "on", kind: str = "", before="", after="", app: str = "",
-          problem: str = "", place: str = "", places=()) -> str:
+          problem: str = "", place: str = "", places=(), title: str = "", q: str = "") -> str:
     """device: a Device or a device id. Numbers and names are filled in; nothing is left as {…}."""
     en, ar = TEXT[outcome]
     dev = device_list.by_id(device) if isinstance(device, str) else device
     if lang == "ar":
-        name = SPOKEN[file][1] if file else ""
+        name = SPOKEN[file][1] if file in SPOKEN else (f"«{title}»" if title else "")
         problems = "، ".join(PROBLEM_AR.get(p.strip(), p.strip()) for p in problem.split(",")) if problem else ""
         place_ar = PLACE_AR.get(place, place)
         return ar.format(file=name, File=name, person=ARABIC_NAMES.get(person, person), to=ARABIC_NAMES.get(to, to),
@@ -118,11 +124,11 @@ def reply(outcome: str, lang: str, *, file: str | None = None, person: str = "",
                          app={"YouTube": "يوتيوب", "Netflix": "نتفلكس", "WhatsApp": "واتساب",
                               "Google Maps": "خرائط جوجل", "Phone": "الهاتف"}.get(app, app), problem=problems,
                          place=place_ar, places="، ".join(PLACE_AR.get(x, x) for x in places),
-                         robot_action=ROBOT_ACTION_AR.get(action, action).format(place=place_ar))
-    name = SPOKEN[file][0] if file else ""
+                         robot_action=ROBOT_ACTION_AR.get(action, action).format(place=place_ar), q=q)
+    name = SPOKEN[file][0] if file in SPOKEN else (f"“{title}”" if title else "")
     dname = dev.name if dev else "the device"
     place_en = place.lower() if place else ""
     return en.format(file=name, File=cap(name), person=person, to=to, n=n, device=dname, Device=cap(dname),
                      action=action, kind=KIND_EN.get(kind, kind), before=before, after=after, app=app, problem=problem,
                      place=place_en, places=", ".join(places),
-                     Robot_action=ROBOT_ACTION_EN.get(action, action).format(place=place_en))
+                     Robot_action=ROBOT_ACTION_EN.get(action, action).format(place=place_en), q=q)

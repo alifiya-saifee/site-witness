@@ -17,6 +17,8 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
+import time
 import os
 import subprocess
 import secrets
@@ -27,7 +29,7 @@ from pathlib import Path
 from fastapi import FastAPI, Header, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, Response
 
-from . import devices, discover, phone_apps, speech, voice
+from . import devices, discover, library, phone_apps, speech, voice
 from .connectors import roborock_vac
 from .commands import parse
 from .devices import may_use
@@ -47,7 +49,10 @@ class Hub:
         self.log = EventLog(db_path)
         self.pair_code = os.environ.get("SW_PAIR_CODE") or f"{secrets.randbelow(10**6):06d}"
         self.helper_token = secrets.token_urlsafe(24)
-        self.sessions: set[str] = set()
+        self.sessions: dict[str, dict] = {}     # session token -> {name, at, ip}
+        self.pair_fails: dict[str, list[float]] = {}  # device address -> times of wrong codes
+        self.pair_fail_total = 0
+        self.library: library.Library | None = None
         self.helper: WebSocket | None = None
         self.results: dict[str, dict] = {}       # tap key -> first answer
         self.commands: dict[str, dict] = {}      # command id -> state, detail, proof
@@ -93,13 +98,70 @@ def info(request: Request, x_session: str | None = Header(default=None)):
 
 @app.post("/api/pair")
 async def pair(request: Request):
+    """Join with the code. 5 wrong tries from one device lock it for a minute; 20 wrong in all make a new code."""
+    ip = request.client.host if request.client else "?"
+    now = time.monotonic()
+    fails = [t for t in hub.pair_fails.get(ip, []) if now - t < 60]
+    hub.pair_fails[ip] = fails
+    if len(fails) >= 5:
+        hub.log.append("pairing.locked", actor="device", content={"from": ip}, key=f"lock:{ip}:{int(fails[0])}")
+        raise HTTPException(429, "Too many wrong codes. Wait a minute, then try again.")
     body = await request.json()
-    if str(body.get("code", "")).strip() != hub.pair_code:
+    if not secrets.compare_digest(str(body.get("code", "")).strip(), hub.pair_code):
+        fails.append(now)
+        hub.pair_fail_total += 1
+        hub.log.append("pairing.failed", actor="device", content={"from": ip})
+        if hub.pair_fail_total >= 20:
+            new_code("too many wrong codes")
         raise HTTPException(403, "That code is not right. It is shown in the terminal on the Mac.")
+    hub.pair_fails.pop(ip, None)
     token = secrets.token_urlsafe(18)
-    hub.sessions.add(token)
-    hub.log.append("pairing.joined", actor="device", content={"from": request.client.host if request.client else "?"})
+    agent = request.headers.get("user-agent", "")
+    name = next((n for k, n in (("iPhone", "iPhone"), ("Android", "Android phone"), ("iPad", "iPad"),
+                                ("Macintosh", "Mac browser"), ("Windows", "Windows PC")) if k in agent), "Browser")
+    hub.sessions[token] = {"name": name, "at": time.strftime("%H:%M"), "ip": ip}
+    hub.log.append("pairing.joined", actor="device", content={"from": ip, "device": name})
     return {"session": token}
+
+
+def new_code(why: str) -> None:
+    hub.pair_code = f"{secrets.randbelow(10**6):06d}"
+    hub.pair_fail_total = 0
+    hub.log.append("pairing.code_changed", actor="hub", content={"why": why})
+    print(f"\n  New pairing code ({why}): {hub.pair_code}\n", flush=True)
+
+
+def session_id(token: str) -> str:
+    return hashlib.sha256(token.encode()).hexdigest()[:8]  # never show the token itself
+
+
+@app.get("/api/sessions")
+def sessions_list(request: Request):
+    mac_only(request)
+    return [{"id": session_id(t), **v} for t, v in hub.sessions.items()]
+
+
+@app.delete("/api/sessions/{sid}")
+def sessions_remove(sid: str, request: Request):
+    mac_only(request)
+    gone = [t for t in hub.sessions if session_id(t) == sid]
+    if not gone:
+        raise HTTPException(404, "Not a joined device")
+    for t in gone:
+        info = hub.sessions.pop(t)
+        hub.log.append("pairing.removed", actor="owner", content={"device": info["name"], "from": info["ip"]})
+    return {"status": "removed"}
+
+
+@app.post("/api/sessions/reset")
+def sessions_reset(request: Request):
+    """Log every joined device out and make a new code."""
+    mac_only(request)
+    n = len(hub.sessions)
+    hub.sessions.clear()
+    hub.log.append("pairing.removed", actor="owner", content={"device": f"all ({n})"})
+    new_code("the owner asked")
+    return {"status": "reset", "removed": n}
 
 
 @app.post("/api/command")
@@ -163,7 +225,13 @@ async def run_command(said: str, person: str, device: str, key: str | None, choo
     if intent.kind:
         dev = devices.by_id(choose[4:]) if choose and choose.startswith("dev:") else intent.device
         return await run_device(intent, dev, person, steps, lang, also_mac, choose)
+    if choose and choose.startswith("lib:") and choose[4:].isdigit():
+        return await open_shared(int(choose[4:]), person, steps, lang, also_mac)
     matches = [BY_ID[choose]] if choose in BY_ID else intent.matches
+    if intent.search_mode or (not matches and intent.action == "open"):
+        found = await search_shared(intent, person, steps, lang, also_mac)
+        if found:
+            return found
     if not matches:
         hub.log.append("file.not_found", actor="hub", content={"said": said})
         return {"status": "not_found", "steps": steps + [{"t": "No file in Records matches that", "ok": False}],
@@ -203,6 +271,79 @@ async def run_command(said: str, person: str, device: str, key: str | None, choo
     await hub.helper.send_json({"type": "open_file", "command_id": cid, "file_id": rec.id,
                                 "filename": rec.filename, "token": ftoken})
     # the spoken reply comes with the final result ("Done. … is open."), not now
+    return {"status": "sent", "command": cid, "steps": steps + [{"t": "Sent to the Mac", "ok": True}]}
+
+
+def get_library() -> "library.Library | None":
+    """The shared folder's index, if the owner shared a folder (opened once, kept)."""
+    st = library.settings()
+    if not st:
+        if hub.library:
+            hub.library.close()
+        hub.library = None
+        return None
+    if hub.library is None or str(hub.library.folder) != str(Path(st["folder"]).resolve()):
+        if hub.library:
+            hub.library.close()
+        hub.library = library.Library(Path(st["folder"]))
+    return hub.library
+
+
+async def search_shared(intent, person: str, steps: list, lang: str, also_mac: bool) -> dict | None:
+    """Look inside the shared folder's files. None means: nothing to say here, fall back to Records."""
+    lib, st = get_library(), library.settings()
+    q = (intent.search or "").strip()
+    if lib is None:
+        if intent.search_mode:
+            return {"status": "not_found", "steps": steps + [{"t": "No folder is shared for searching (Mac → Shared folder)", "ok": False}],
+                    "reply": await new_reply("no_folder", lang, also_mac)}
+        return None
+    if PEOPLE[person]["role"] not in st.get("roles", []):
+        name = PEOPLE[person]["name"]
+        return {"status": "refused", "steps": steps + [{"t": f"{name} may not open files from the shared folder", "ok": False}],
+                "reply": await new_reply("refused", lang, also_mac, person=name)}
+    if not library.Library.terms(q):
+        return None
+    results = await asyncio.to_thread(lib.search, q)
+    words = " ".join(library.Library.terms(q)) if lang == "en" else q
+    hub.log.append("file.searched", actor="hub", content={"mode": intent.search_mode or "open", "found": str(len(results))})
+    if not results:
+        if not intent.search_mode:
+            return None  # nothing in the folder either: the usual "couldn't find that file"
+        return {"status": "not_found", "steps": steps + [{"t": f"No file in the shared folder mentions “{q}”", "ok": False}],
+                "reply": await new_reply("search_none", lang, also_mac, q=words)}
+    steps = steps + [{"t": f"Searched inside the shared folder: {len(results)} file(s)", "ok": True}]
+    clear = len(results) == 1 or results[0]["score"] < results[1]["score"] * 1.5  # bm25: lower is better
+    if intent.search_mode != "find" and clear:
+        return await open_shared(results[0]["id"], person, steps, lang, also_mac)
+    options = [{"id": f"lib:{r['id']}", "title": r["title"], "snippet": r["snippet"]} for r in results]
+    rep = await new_reply("search_one", lang, also_mac, q=words, title=results[0]["title"], file="lib") if len(results) == 1 \
+        else await new_reply("search_found", lang, also_mac, n=len(results), q=words)
+    return {"status": "choose", "steps": steps + [{"t": "Which one?", "ok": None}], "options": options, "reply": rep}
+
+
+async def open_shared(fid: int, person: str, steps: list, lang: str, also_mac: bool) -> dict:
+    lib, st = get_library(), library.settings() or {}
+    name = PEOPLE[person]["name"]
+    if PEOPLE[person]["role"] not in st.get("roles", []):
+        return {"status": "refused", "steps": steps + [{"t": f"{name} may not open files from the shared folder", "ok": False}],
+                "reply": await new_reply("refused", lang, also_mac, person=name)}
+    path = lib.path_of(fid) if lib else None
+    if path is None:
+        return {"status": "not_found", "steps": steps + [{"t": "That file isn't in the shared folder any more", "ok": False}],
+                "reply": await new_reply("file_gone", lang, also_mac)}
+    title = lib.get(fid)["title"]
+    steps = steps + [{"t": f"Found “{title}” in the shared folder", "ok": True}]
+    if hub.helper is None:
+        return {"status": "no_helper", "steps": steps + [{"t": "No helper is connected on the Mac", "ok": False}],
+                "reply": await new_reply("no_helper", lang, False)}
+    fileid, ftoken, cid = f"lib-{fid}", secrets.token_urlsafe(18), uuid.uuid4().hex[:12]
+    hub.file_tokens[ftoken] = fileid
+    hub.commands[cid] = {"state": "sent", "detail": "Sent to the Mac", "file": fileid, "title": title, "proof": None,
+                         "lang": lang, "also_mac": also_mac, "reply": None}
+    hub.log.append("device.command", actor="hub", content={"command": cid, "do": "open_file", "file": fileid})
+    await hub.helper.send_json({"type": "open_file", "command_id": cid, "file_id": fileid,
+                                "filename": fileid + path.suffix.lower(), "token": ftoken})
     return {"status": "sent", "command": cid, "steps": steps + [{"t": "Sent to the Mac", "ok": True}]}
 
 
@@ -531,6 +672,92 @@ async def add_ros(request: Request):
     return {"status": "added", "device": dev.id}
 
 
+@app.get("/api/folder")
+def folder_info(request: Request):
+    mac_only(request)
+    st = library.settings()
+    lib = get_library()
+    counts = None
+    if lib:
+        total, no_text = lib.db.execute("SELECT count(*), sum(has_text=0) FROM files").fetchone()
+        counts = {"files": total, "no_text": no_text or 0}
+    return {"folder": st["folder"] if st else None, "roles": st["roles"] if st else [], "counts": counts,
+            "default": str(library.DEFAULT_FOLDER)}
+
+
+@app.post("/api/folder")
+async def folder_share(request: Request):
+    """Share one folder for searching (the owner's choice, on the Mac), then read it."""
+    mac_only(request)
+    b = await request.json()
+    try:
+        folder = library.check_folder(b.get("folder", ""))
+    except library.FolderError as e:
+        raise HTTPException(400, str(e))
+    roles = [r for r in devices.ROLES if r in set(b.get("roles") or [])]
+    if not roles:
+        raise HTTPException(400, "Tick at least one role who may open files from it")
+    if hub.library:
+        hub.library.close()
+        hub.library = None
+    library.share(folder, roles)
+    hub.log.append("folder.shared", actor="owner", content={"folder": folder.name, "roles": ", ".join(roles)})
+    return await folder_reindex(request)
+
+
+@app.post("/api/folder/reindex")
+async def folder_reindex(request: Request):
+    mac_only(request)
+    lib = get_library()
+    if not lib:
+        raise HTTPException(400, "Share a folder first")
+    counts = await asyncio.to_thread(lib.index)
+    hub.log.append("folder.indexed", actor="hub", content={k: str(v) for k, v in counts.items()})
+    return {"folder": str(lib.folder), **counts}
+
+
+@app.post("/api/folder/samples")
+async def folder_samples(request: Request):
+    """Copy the 3 made-up sample reports into the shared folder."""
+    mac_only(request)
+    lib = get_library()
+    if not lib:
+        raise HTTPException(400, "Share a folder first")
+    import shutil
+    src = ROOT / "samples" / "shared"
+    if not src.exists() or not any(src.iterdir()):
+        raise HTTPException(404, "Sample files missing: run scripts/make_sample_pdfs.py")
+    for f in src.iterdir():
+        if f.is_file() and not f.name.startswith("."):
+            shutil.copy2(f, lib.folder / f.name)
+    return await folder_reindex(request)
+
+
+@app.delete("/api/folder")
+def folder_unshare(request: Request):
+    mac_only(request)
+    if hub.library:
+        hub.library.close()
+        hub.library = None
+    library.unshare()
+    hub.log.append("folder.unshared", actor="owner", content={})
+    return {"status": "unshared"}
+
+
+async def keep_index_fresh() -> None:
+    """Every 60 s, pick up files added, changed or removed in the shared folder."""
+    while True:
+        await asyncio.sleep(60)
+        lib = get_library()
+        if lib:
+            try:
+                counts = await asyncio.to_thread(lib.index)
+                if counts["changed"]:
+                    hub.log.append("folder.indexed", actor="hub", content={k: str(v) for k, v in counts.items()})
+            except Exception:
+                pass
+
+
 @app.delete("/api/devices/{device_id}")
 def remove_device(device_id: str, request: Request):
     mac_only(request)
@@ -685,6 +912,12 @@ def helper_file(file_id: str, request: Request, t: str = ""):
         raise HTTPException(403, "Only the helper on this Mac can download files")
     if hub.file_tokens.pop(t, None) != file_id:  # one use only, and only for that file
         raise HTTPException(403, "Bad or used token")
+    if file_id.startswith("lib-") and file_id[4:].isdigit():
+        lib = get_library()
+        path = lib.path_of(int(file_id[4:])) if lib else None  # checked again: still inside the shared folder
+        if path is None:
+            raise HTTPException(404, "That file isn't in the shared folder any more")
+        return FileResponse(path, filename=file_id + path.suffix.lower())
     rec = BY_ID[file_id]
     if not rec.path.exists():
         raise HTTPException(404, "File missing: run scripts/make_sample_pdfs.py")
@@ -735,7 +968,8 @@ async def helper_ws(ws: WebSocket):
                     outcome, kw = device_outcome(c, msg, confirmed)
                     c["reply"] = await new_reply(outcome, c.get("lang", "en"), c.get("also_mac", False), **kw)
                 else:
-                    c["reply"] = await new_reply(state, c.get("lang", "en"), c.get("also_mac", False), file=c["file"])
+                    c["reply"] = await new_reply(state, c.get("lang", "en"), c.get("also_mac", False), file=c["file"],
+                                                 title=c.get("title", ""))
             c["detail"] = str(msg.get("detail", ""))[:200]
             c["state"] = state
             what = {"device": c["device"], "action": c["action"]} if "device" in c else {"file": c["file"]}
@@ -788,8 +1022,10 @@ async def serve() -> None:
     print(f"  On your phone:      https://{ip}:{SECURE_PORT}   (same Wi-Fi)")
     print("                      First time: Chrome says “not private” → Advanced → Proceed. That’s this Mac’s own certificate.")
     print(f"  Pairing code:       {hub.pair_code}")
+    if os.environ.get("SW_PAIR_CODE"):
+        print("  Note: a fixed pairing code (SW_PAIR_CODE) is for testing only. Leave it unset for a new code each run.")
     print("  Stop with Ctrl+C\n", flush=True)
-    await asyncio.gather(local.serve(), wifi.serve())
+    await asyncio.gather(local.serve(), wifi.serve(), keep_index_fresh())
 
 
 def main():

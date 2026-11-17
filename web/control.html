@@ -64,6 +64,8 @@ header span{font-size:12px;color:var(--muted)}
 .found .row{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
 .found input[type=text]{flex:1;min-width:120px;background:transparent;border:1px solid var(--line-2);border-radius:8px;padding:7px 9px;color:var(--ink);font:inherit;font-size:14px}
 .found .tog{font-size:13px}
+.btn.opt{display:block;width:100%;text-align:left;margin-top:6px}
+.btn.opt small{display:block;color:var(--muted);font-size:12px;font-weight:400;margin-top:3px;line-height:1.35}
 .btn.stop{background:var(--bad);border-color:var(--bad);color:#fff;font-weight:700}
 .btn.app{display:block;text-align:center;text-decoration:none;margin-top:10px;font-size:17px;padding:14px}
 .tog{display:flex;gap:8px;align-items:center;font-size:14px;margin:4px 0}
@@ -116,6 +118,24 @@ header span{font-size:12px;color:var(--muted)}
       <button class="btn" type="button" id="scan">Scan my Wi-Fi</button>
       <div id="found"></div>
       <p class="hint" id="scanhint"></p>
+    </section>
+
+    <section class="card" id="foldercard" hidden>
+      <p class="k">Shared folder (this Mac only)</p>
+      <p class="hint" style="margin:0 0 8px">The only folder whose files can be searched by the words inside them (“open the report about the cracked balcony”). Nothing outside it is read. PDF, Word, text and Markdown files.</p>
+      <div class="found" style="border:0;padding:0">
+        <div class="row"><input type="text" id="fpath" aria-label="Folder to share"></div>
+        <div class="row"><label class="tog"><input type="checkbox" data-frole="owner" checked> owner</label><label class="tog"><input type="checkbox" data-frole="broker" checked> broker</label><label class="tog"><input type="checkbox" data-frole="visitor"> visitor</label><span class="hint" style="margin:0">may open files from it</span></div>
+        <div class="row"><button class="btn primary" type="button" id="fshare">Share this folder</button><button class="btn" type="button" id="freindex">Re-index</button><button class="btn" type="button" id="fsamples">Add sample files</button><button class="btn" type="button" id="funshare">Stop sharing</button></div>
+      </div>
+      <p class="hint" id="fhint"></p>
+    </section>
+
+    <section class="card" id="sessionscard" hidden>
+      <p class="k">Joined phones (this Mac only)</p>
+      <div id="sessions"></div>
+      <button class="btn" type="button" id="sreset" style="margin-top:8px">Remove all + new code</button>
+      <p class="hint" id="shint">Only people you give the code to can join. 5 wrong codes lock a device out for a minute.</p>
     </section>
 
     <section class="card" id="robotcard" hidden>
@@ -175,7 +195,7 @@ Dock: 0, 0, 0</textarea></div>
 const $=s=>document.querySelector(s);
 const store={ get(k){ try{return localStorage.getItem(k);}catch(e){return null;} }, set(k,v){ try{localStorage.setItem(k,v);}catch(e){} } };
 let session=store.get('sw-session')||'', person=store.get('sw-person')||'layla', people=[], lastSaid='';
-const EXAMPLES=['open the Al Noor slides','open the report','send the Al Noor report to Karim','turn on the lamp','turn off the TV','volume up','open YouTube on the TV','print the Al Noor report','open WhatsApp','WhatsApp message: I’ve sent the report','clean the kitchen','robot go to the meeting room','stop','افتح عرض النور','نظف المطبخ'];
+const EXAMPLES=['open the Al Noor slides','open the report','send the Al Noor report to Karim','turn on the lamp','turn off the TV','volume up','open YouTube on the TV','print the Al Noor report','open WhatsApp','WhatsApp message: I’ve sent the report','clean the kitchen','robot go to the meeting room','stop','open the report about the cracked balcony','find lift','افتح عرض النور','ابحث عن تسرب المياه'];
 
 async function api(path,opts={}){
   let r;
@@ -310,8 +330,29 @@ function renderFound(found, box, hint){
     }catch(e){ hint.textContent='Couldn’t add it: '+e.message; b.disabled=false; }
   });
 }
+/* Shared folder + joined phones (Mac only) */
+function setupFolder(){
+  if(!isLocal) return;
+  $('#foldercard').hidden=false; $('#sessionscard').hidden=false;
+  const roles=()=>[...document.querySelectorAll('[data-frole]:checked')].map(x=>x.dataset.frole);
+  const show=async()=>{ try{ const f=await api('/api/folder'); $('#fpath').value=f.folder||f.default;
+    $('#fhint').textContent=f.folder?`Shared: ${f.folder}`+(f.counts?` · ${f.counts.files} files${f.counts.no_text?`, ${f.counts.no_text} with no text inside (scans)`:''}`:'')+` · may open: ${f.roles.join(', ')}`:'Nothing is shared yet.';
+    if(f.folder) document.querySelectorAll('[data-frole]').forEach(x=>x.checked=f.roles.includes(x.dataset.frole)); }catch(e){} };
+  const act=async(path,opts,busy)=>{ $('#fhint').textContent=busy; try{ await api(path,opts); }catch(e){ $('#fhint').textContent=e.message; return; } show(); refresh(); };
+  $('#fshare').onclick=()=>act('/api/folder',{method:'POST',body:JSON.stringify({folder:$('#fpath').value,roles:roles()})},'Sharing and reading the files…');
+  $('#freindex').onclick=()=>act('/api/folder/reindex',{method:'POST'},'Reading the files…');
+  $('#fsamples').onclick=()=>act('/api/folder/samples',{method:'POST'},'Adding 3 made-up reports…');
+  $('#funshare').onclick=()=>act('/api/folder',{method:'DELETE'},'Stopping…');
+  show();
+  const sess=async()=>{ try{ const list=await api('/api/sessions');
+    $('#sessions').innerHTML=list.length?list.map(x=>`<div class="dev"><span class="bulb" aria-hidden="true">📱</span><div class="grow"><b>${esc(x.name)}</b><small>joined ${esc(x.at)} · ${esc(x.ip)}</small></div><button class="btn" type="button" data-sess="${esc(x.id)}">Remove</button></div>`).join(''):'<p class="hint">No phones have joined.</p>';
+    $('#sessions').querySelectorAll('[data-sess]').forEach(b=>b.onclick=async()=>{ await api('/api/sessions/'+b.dataset.sess,{method:'DELETE'}); sess(); }); }catch(e){} };
+  $('#sreset').onclick=async()=>{ const r=await api('/api/sessions/reset',{method:'POST'}); $('#shint').textContent=`Removed ${r.removed}. The new code is in the terminal on the Mac.`; sess(); };
+  sess(); setInterval(sess,5000);
+}
 function setupScan(){
   if(!isLocal) return;
+  setupFolder();
   $('#scancard').hidden=false; $('#robotcard').hidden=false;
   $('#scan').onclick=async()=>{
     $('#scan').disabled=true; $('#scanhint').textContent='Listening for about 6 seconds…'; $('#found').innerHTML='';
@@ -370,7 +411,7 @@ async function go(text, choose, lang){
   catch(e){ if(e.status===401){ session=''; start(); } drawSteps([{t:e.message,ok:false}]); return; }
   drawSteps(r.steps);
   if(r.status==='choose'){
-    $('#options').innerHTML=r.options.map(o=>`<button class="btn" data-o="${o.id}">${esc(o.title)}</button>`).join('');
+    $('#options').innerHTML=r.options.map(o=>`<button class="btn opt" data-o="${o.id}">${esc(o.title)}${o.snippet?`<small>${esc(o.snippet)}</small>`:''}</button>`).join('');
     $('#options').querySelectorAll('[data-o]').forEach(b=>b.onclick=()=>go(lastSaid,b.dataset.o));
   }
   if(r.status==='needs_approval'){
@@ -405,7 +446,9 @@ async function follow(cid, steps){
 }
 async function refresh(){
   try{
-    const info=await api('/api/info'); $('#hdot').classList.toggle('on',info.helper); $('#hdot span').textContent=info.helper?'Mac helper connected':'Mac helper not connected';
+    const info=await api('/api/info');
+    if(!info.paired && !$('#main').hidden){ session=''; store.set('sw-session',''); start(); return; }  // removed on the Mac
+    $('#hdot').classList.toggle('on',info.helper); $('#hdot span').textContent=info.helper?'Mac helper connected':'Mac helper not connected';
     const devs=await api('/api/devices');
     const icon={plug:'💡',tv:'📺',printer:'🖨️',robot:'🤖'};
     $('#devices').innerHTML=devs.map(d=>`<div class="dev ${d.on?'on':''}"><span class="bulb" aria-hidden="true">${icon[d.kind]||'🔌'}</span><div class="grow"><b>${esc(d.name[0].toUpperCase()+d.name.slice(1))}</b>${d.pretend?' <span class="sample">pretend</span>':''}<small>${esc(d.room)}${d.model&&d.model!=='pretend'?' · '+esc(d.model):''} · ${d.kind==='robot'?esc(d.state||'not used yet')+(d.place?' · at '+esc(d.place):'')+(d.battery!=null?' · 🔋 '+d.battery+'%':'')+' · '+esc((d.sub==='vacuum'?'rooms: ':'spots: ')+d.places.join(', ')):d.kind==='printer'?'prints after your tap':d.on===true?'on':d.on===false?'off':'not used yet'} · ${esc(d.roles.join(', '))}</small></div>${d.kind==='robot'?`<button class="btn stop" type="button" data-stop="${esc(d.name)}" title="Stops at once, no tap needed">Stop</button>`:''}${isLocal&&!d.pretend&&d.id!=='room-lamp'?`<button class="btn" type="button" data-rm="${esc(d.id)}">Remove</button>`:''}</div>`).join('');

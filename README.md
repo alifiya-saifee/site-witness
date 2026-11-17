@@ -83,6 +83,26 @@ committed). Once a real device is added, the pretend lamp goes away.
 
 The helper only runs the actions each kind allows (for example a plug has no volume) on devices in the list.
 
+## Search inside files (one shared folder)
+
+On the Mac page, **Shared folder** → keep `~/Documents/Diwan Shared` (or pick another folder inside your home
+folder) → tick who may open its files → **Share this folder**. **Add sample files** copies in 3 made-up reports.
+Then say “open the report about the cracked balcony”, “find lift” or «ابحث عن تسرب المياه».
+
+- Only that folder is ever read: PDF, Word (.docx), text and Markdown; hidden files, links leading out of the folder
+  and files over 20 MB are skipped. Your home folder itself, Library, Desktop, Downloads, iCloud and hidden folders
+  can't be shared. **Stop sharing** forgets the folder and deletes the search index.
+- The index (`run/search.db`) is updated every minute, or with **Re-index**. File contents never go in the event log.
+- The 4 Records files still come first; the shared folder is searched when you say “about …” / “find …”, or when
+  nothing in Records matches. A scanned PDF with no text inside is found only by its name (no OCR yet).
+
+## Pairing
+
+Only someone you give the 6-digit code to can join, and only from your Wi-Fi. A new code is made each run (unless
+`SW_PAIR_CODE` is set, which is for testing only). 5 wrong codes lock that device out for a minute; 20 wrong in all
+make a new code. On the Mac, **Joined phones** lists every joined device with **Remove**, and **Remove all + new
+code** logs everyone out. Joining shares nothing from the phone: it only lets it send commands to this Mac.
+
 ## Apps on your phone
 
 Say “open WhatsApp” / «افتح واتساب» (or YouTube, Google Maps) and the page shows a big **Open WhatsApp** button:

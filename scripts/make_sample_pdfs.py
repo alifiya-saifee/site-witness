@@ -58,6 +58,45 @@ def main() -> None:
                             f"--user-data-dir={tmp}/chrome", f"--print-to-pdf={out}", src.as_uri()],
                            check=True, capture_output=True, timeout=60)
             print(f"  made {out.relative_to(ROOT)} ({out.stat().st_size // 1024} KB)")
+    make_shared_samples()
+
+
+# ---- 3 made-up reports for the shared-folder search demo (samples/shared) ----
+SHARED_DIR = ROOT / "samples" / "shared"
+SHARED_PDFS = {
+    "marina-court-balcony-inspection.pdf": ("Marina Court balcony inspection", [
+        page("Site walk · Marina Court (sample)", "Balcony inspection, level 7",
+             "<p>Cracked balcony slab on level 7, unit 704. Rust stains below the railing suggest water reaching the "
+             "steel. Needs a structural engineer's review before the next rain season.</p>"
+             "<p class='tag'>Needs a human: structural check</p>", "Walk SW-112 · 9 Nov 2026")]),
+    "al-noor-lift-maintenance-note.pdf": ("Al Noor lift maintenance note", [
+        page("Maintenance note · Al Noor Residence (sample)", "Lift 2: door sensor",
+             "<p>The lift door sensor on lift 2 is slow to react. The contractor replaced the light curtain on "
+             "12 Nov 2026; a camera check of the fix is booked.</p>", "Note M-31")]),
+}
+
+
+def make_shared_samples() -> None:
+    SHARED_DIR.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory() as tmp:
+        for name, (title, pages) in SHARED_PDFS.items():
+            src = Path(tmp) / (name + ".html")
+            src.write_text(f"<!doctype html><meta charset='utf-8'><title>{title}</title>{STYLE}" + "".join(pages))
+            out = SHARED_DIR / name
+            subprocess.run([CHROME, "--headless=new", "--disable-gpu", "--no-pdf-header-footer",
+                            f"--user-data-dir={tmp}/chrome", f"--print-to-pdf={out}", src.as_uri()],
+                           check=True, capture_output=True, timeout=60)
+            print(f"  made {out.relative_to(ROOT)}")
+    # Arabic as a Word file: Word keeps Arabic text in reading order (PDF text often comes out scrambled)
+    import docx
+    d = docx.Document()
+    d.core_properties.title = "تقرير تسرب المياه"
+    d.add_heading("تقرير تسرب المياه (بيانات تجريبية)", 1)
+    d.add_paragraph("برج الخليج التجريبي، الطابق الثالث، الشقة 305.")
+    d.add_paragraph("يوجد تسرب للمياه من السقف فوق المطبخ، وبقع رطوبة على الجدار. يحتاج إلى فحص مهندس.")
+    out = SHARED_DIR / "water-leak-report-ar.docx"
+    d.save(out)
+    print(f"  made {out.relative_to(ROOT)}")
 
 
 if __name__ == "__main__":

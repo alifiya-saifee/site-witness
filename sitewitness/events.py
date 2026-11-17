@@ -21,6 +21,14 @@ TYPES = {
     "network.scanned",     # the Mac listened for devices on the Wi-Fi (it controls nothing)
     "approval.cancelled",  # a waiting approval was dropped (e.g. "stop" was said first)
     "phone.app_opened",    # an app was opened on the phone that asked (after a tap; nothing sent for you)
+    "folder.shared",       # the owner chose a folder to search (on the Mac); who may open its files
+    "folder.indexed",      # the shared folder was read: counts only, never contents
+    "folder.unshared",
+    "file.searched",       # a search in the shared folder (how many found)
+    "pairing.failed",      # a wrong pairing code
+    "pairing.locked",      # too many wrong codes from one device: joining paused for a minute
+    "pairing.removed",     # the owner logged a joined device out
+    "pairing.code_changed",
     "robot.login",         # the Roborock account was linked on the Mac (no email or token is logged)
     "file.not_found",      # nothing matched
     "file.ambiguous",      # several files matched; the person was asked which one

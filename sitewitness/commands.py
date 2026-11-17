@@ -12,6 +12,9 @@
 - "open WhatsApp" / «افتح واتساب» / "WhatsApp message: …" -> open that app on the phone you spoke on
   ("open YouTube" goes to the TV when a TV is added, unless you say "on my phone").
 - "clean the kitchen", "robot go to the meeting room", "stop", «نظف المطبخ», «وقف» -> a robot.
+- "find cracked balcony", «ابحث عن تسرب المياه" -> list files in the shared folder with those words inside
+- "open the report about the cracked balcony" -> open the best match from the shared folder
+  (the 4 Records files still come first: "open the Al Noor slides" is unchanged)
 """
 from __future__ import annotations
 
@@ -38,6 +41,8 @@ ROBOT_DOCK = ("go home", "home", "dock", "charge", "go back", "return home", "ba
 ROBOT_GOTO = ("go to", "drive to", "move to", "head to", "come to", "روح", "اذهب", "توجه", "روح الى", "روح إلى", "اذهب الى", "اذهب إلى")
 ROBOT_CLEAN = ("clean", "vacuum", "hoover", "نظف", "كنس")
 ROBOT_START = ("start", "begin", "ابدأ", "ابدا", "شغل")
+FIND_WORDS = ("search for", "look for", "find", "search", "ابحث عن", "ابحث", "دور على", "فتش عن")
+ABOUT_WORDS = ("that mentions", "that says", "mentioning", "regarding", "about", "بخصوص", "يذكر", "عن")
 FILLER = {"the", "a", "to", "please", "pls", "robot", "vacuum", "hoover", "room", "and", "ال", "من", "فضلك", "الروبوت"}
 APP_WORDS = {"app:youtube": ("youtube", "you tube", "يوتيوب", "اليوتيوب"), "app:netflix": ("netflix", "نتفلكس", "نتفليكس")}
 
@@ -65,6 +70,8 @@ class Intent:
     place_unknown: str | None = None  # robots: a place name the robot doesn't know
     app: str | None = None            # phone apps: which app
     message: str | None = None        # WhatsApp: text to have ready (you still press send)
+    search: str | None = None         # shared folder: the words to look for inside files
+    search_mode: str | None = None    # "find" (list them) | "open" (open the best) | None (only if Records has none)
 
 
 def any_of(text: str, words) -> bool:
@@ -194,6 +201,25 @@ def phone_intent(said: str, text: str, devs) -> Intent | None:
                   message=phone_apps.message_text(said) if app == "whatsapp" else None)
 
 
+def words_after(text: str, verbs) -> str:
+    """Everything said after the first of these words ("about the cracked balcony" -> "the cracked balcony")."""
+    for v in sorted(verbs, key=len, reverse=True):
+        key = f" {normalise(v).strip()} "
+        if key in text:
+            return text.split(key, 1)[1].strip()
+    return ""
+
+
+def search_part(text: str, action: str) -> tuple[str | None, str | None]:
+    if action == "send":
+        return None, None
+    if any_of(text, FIND_WORDS):
+        return words_after(text, FIND_WORDS) or None, "find"
+    if any_of(text, ABOUT_WORDS):
+        return words_after(text, ABOUT_WORDS) or None, "open"
+    return text.strip(), None
+
+
 def parse(said: str, devs=None) -> Intent:
     text = normalise(said)
     devs = device_list.current() if devs is None else devs
@@ -210,7 +236,9 @@ def parse(said: str, devs=None) -> Intent:
         if m:
             recipient = m.group(1).strip().title()
             text = text[: m.start()] + " "  # the recipient's name is not part of the file name
-    return Intent(action=action, text=text, recipient=recipient, matches=match(text))
+    search, mode = search_part(text, action)
+    return Intent(action=action, text=text, recipient=recipient, matches=[] if mode else match(text),
+                  search=search, search_mode=mode)
 
 
 def match(text: str) -> list[Record]:

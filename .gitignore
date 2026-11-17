@@ -7,5 +7,6 @@ __pycache__/
 .DS_Store
 run/
 samples/records/*.pdf
+samples/shared/
 .pytest_cache/
 run-demo.log

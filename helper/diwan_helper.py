@@ -48,6 +48,7 @@ OPENED = RUN_DIR / "opened"
 PORT = int(os.environ.get("SW_PORT", "8040"))
 HUB = f"127.0.0.1:{PORT}"
 SAFE_NAME = re.compile(r"^[a-z0-9][a-z0-9-]*\.pdf$")
+SHARED_NAME = re.compile(r"^(lib-\d{1,9})\.(pdf|docx|txt|md)$")  # a shared-folder file: id + type, never a path
 CAMERA = os.environ.get("SW_CAMERA", "0")   # 0 = the Mac's own camera (ffmpeg -list_devices shows others)
 BRIGHTER = 8.0   # points out of 255 the picture must change by
 BRIGHT_SHARE = 1.0  # or: % of near-white pixels must change by this much (the camera's auto-exposure hides some of it)
@@ -243,9 +244,13 @@ class Helper:
         """Why this message must be refused, or None if it is fine."""
         if msg.get("type") != "open_file":
             return "I only open files"
-        if msg.get("file_id") not in BY_ID:
+        shared = SHARED_NAME.match(str(msg.get("filename", "")))
+        if shared:
+            if shared.group(1) != msg.get("file_id"):
+                return "File name does not match the shared file"
+        elif msg.get("file_id") not in BY_ID:
             return "Not a file in Records"
-        if BY_ID[msg["file_id"]].filename != msg.get("filename") or not SAFE_NAME.match(msg.get("filename", "")):
+        elif BY_ID[msg["file_id"]].filename != msg.get("filename") or not SAFE_NAME.match(msg.get("filename", "")):
             return "File name does not match Records"
         if not msg.get("token") or msg["token"] in self.used_tokens:
             return "Token missing or already used"
@@ -266,6 +271,12 @@ class Helper:
         self.opened_dir.mkdir(parents=True, exist_ok=True)
         path = self.opened_dir / msg["filename"]
         path.write_bytes(data)
+        if path.suffix != ".pdf":  # Word or text: the Mac's default app; we can't ask it what is open
+            if self.run(["open", str(path)]).returncode != 0:
+                return result | {"detail": "The Mac would not open the file"}
+            time.sleep(min(self.wait, 2))
+            return result | {"ok": True, "confirmed": False, "proof_b64": self.screenshot(),
+                             "detail": "Opened with the Mac's default app (it can't be asked what is open)"}
         if self.run(["open", "-a", "Preview", str(path)]).returncode != 0:
             return result | {"detail": "Preview would not open the file"}
         seen = self.is_open(path.name)

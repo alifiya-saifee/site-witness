@@ -13,7 +13,7 @@ if [ ! -x .venv/bin/python ]; then
 fi
 .venv/bin/pip install -q -r requirements.txt
 
-if [ ! -f samples/records/al-noor-law3-slides.pdf ]; then
+if [ ! -f samples/records/al-noor-law3-slides.pdf ] || [ ! -d samples/shared ]; then
   echo "  Making the sample PDFs…"
   .venv/bin/python scripts/make_sample_pdfs.py
 fi
