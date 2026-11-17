@@ -344,8 +344,8 @@ def device_outcome(c: dict, msg: dict, confirmed: bool) -> tuple[str, dict]:
         if not msg.get("ok"):
             return ("robot_problem", kw | {"problem": msg["problem"]}) if msg.get("problem") else ("robot_failed", kw)
         if not confirmed:
-            if action == "goto" and msg.get("state") == "idle":
-                return "robot_stopped_early", kw
+            if action in ("goto", "dock") and msg.get("state") == "idle":
+                return "robot_stopped_early", kw | {"place": kw["place"] or "dock"}
             return ("robot_on_way", kw) if msg.get("state") == "moving" else ("robot_unsure", kw)
         return f"robot_{action}", kw
     if not msg.get("ok"):

@@ -43,7 +43,7 @@ Key: ⬜ to build · 🟢 done · ❓ open
 | Smart plug demo: “turn on the lamp” → Tapo plug (or pretend lamp) → state read back + before/after camera photo; risky devices need a tap | 🟡 built and tested with the pretend lamp; real plug + camera not tried yet (`sitewitness/devices.py`) |
 | Real devices on the Wi-Fi: scan → add (name, room, roles; Mac only) → Samsung TV (power, volume, mute, apps; read back from the TV) and IPP printer (print after a tap; job followed to completed) | 🟡 built and tested with fakes; scan + printer status work on the real network; TV and a real print not tried yet (`sitewitness/discover.py`, `sitewitness/connectors/`) |
 | Phone apps: “open WhatsApp” → one-tap button on the phone (message typed, you press send) | 🟢 built and tested; try on the phone (`sitewitness/phone_apps.py`) |
-| Robots: Roborock vacuum + ROS 2 robot (rosbridge); every move needs a tap, Stop never does; pretend robots meanwhile | 🟡 pretend robots work live; ROS tested against a fake rosbridge; real Roborock login not tried (`sitewitness/connectors/robots.py`, `roborock_vac.py`, `ros_robot.py`) |
+| Robots: Roborock vacuum + ROS 2 robot (rosbridge); every move needs a tap, Stop never does; pretend robots meanwhile | 🟡 ROS: passes against a real Nav2 + rosbridge simulation in Docker (`tools/ros-sim`); Roborock: passes against the library's official simulator; no real robot or Roborock account tried yet |
 | Home Assistant room hub client; commands logged and confirmed | ⬜ |
 | Hub hardware: Pi/mini PC, IR blaster, CEC, Wi-Fi plug | ⬜ |
 | Guiding mode for devices with no interface | ⬜ |

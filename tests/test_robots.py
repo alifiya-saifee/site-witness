@@ -122,6 +122,8 @@ class FakeRosbridge:
                                     "msg": {"pose": {"pose": {"position": {"x": pose[0], "y": pose[1], "z": 0}}}}}))
             if m["op"] == "subscribe":
                 send_pose()
+            if m["op"] == "call_service":
+                ws.send(json.dumps({"op": "service_response", "id": m["id"], "result": True, "values": {"return_code": 0}}))
             if m["op"] == "send_action_goal" and self.drive_to:
                 for step in (0.5, 1.0):
                     pose[:] = [self.drive_to[0] * step, self.drive_to[1] * step]
@@ -155,8 +157,10 @@ def test_ros_stop_cancels_the_goal_and_sends_zero_speed(tmp_path):
         r = ros(bridge, tmp_path).do("stop")
     finally:
         bridge.close()
-    ops = [(m["op"], m.get("topic") or m.get("id")) for m in bridge.got]
-    assert ("cancel_action_goal", "diwan-abc") in ops and ("publish", "/cmd_vel") in ops
+    ops = [(m["op"], m.get("topic") or m.get("service") or m.get("id")) for m in bridge.got]
+    assert ("call_service", "/navigate_to_pose/_action/cancel_goal") in ops  # cancels every goal, from any connection
+    assert ("publish", "/cmd_vel") in ops
+    assert "Nav2 cancelled its goals" in r["detail"]
     assert r["confirmed"]  # the robot's position didn't change
 
 
@@ -386,3 +390,15 @@ def test_stopped_trip_says_so(client):
         client.get("/api/events")
     assert client.get(f"/api/status/{a['command']}").json()["reply"]["text"] == \
         "The office robot stopped before getting to the reception."
+
+
+def test_stopped_trip_home_says_so(client):
+    with helper_ws(client) as ws:
+        r = client.post("/api/command", json={"text": "office robot go home", "person": "layla"}).json()
+        a = client.post(f"/api/approve/{r['approval']}").json()
+        assert ws.receive_json()["action"] == "dock"
+        ws.send_json({"type": "result", "command_id": a["command"], "ok": True, "confirmed": False, "state": "idle",
+                      "detail": "Stopped before getting there"})
+        client.get("/api/events")
+    assert client.get(f"/api/status/{a['command']}").json()["reply"]["text"] == \
+        "The office robot stopped before getting to the dock."

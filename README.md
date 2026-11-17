@@ -106,5 +106,7 @@ goes to the TV once a TV is added, unless you say “on my phone”.
   password, never committed). Its rooms come from the Roborock app.
 - **Add a ROS 2 robot**: its IP, the rosbridge port (9090), and its spots, one per line: `Meeting room: 4, 2, 0`
   (x, y in metres on its map, heading in radians). It needs `rosbridge_server` and Nav2 running on the robot.
+- **No robot to hand?** `tools/ros-sim/README.md` runs a real Nav2 robot simulation in Docker, and the Roborock
+  connector is tested against Roborock's own simulator in the normal tests.
 
 Tests: `.venv/bin/pytest -q`
