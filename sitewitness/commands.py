@@ -14,6 +14,10 @@
   "on my phone", otherwise on the device you spoke on ("open YouTube" goes to the TV when one is added,
   unless you name the Mac or the phone). "write an email saying …" opens a draft: you add who and press send.
 - "clean the kitchen", "robot go to the meeting room", "stop", «نظف المطبخ», «وقف» -> a robot.
+- "turn up the volume on my Mac" / «ارفع الصوت على الماك» -> the Mac's own volume (a TV only if "TV" is said
+  or a TV is added and the Mac isn't named)
+- "open Cosmique website" -> a website you saved on the Mac (never an address someone says); not saved yet ->
+  it asks for the address
 - "find cracked balcony", «ابحث عن تسرب المياه" -> list files in the shared folder with those words inside
 - "open the report about the cracked balcony" -> open the best match from the shared folder
   (the 4 Records files still come first: "open the Al Noor slides" is unchanged)
@@ -24,7 +28,7 @@ import re
 from dataclasses import dataclass, field
 
 from . import devices as device_list
-from . import apps
+from . import apps, sites
 from .devices import KIND_WORDS, Device
 from .records import RECORDS, Record
 
@@ -75,6 +79,11 @@ class Intent:
     message: str | None = None        # WhatsApp: text to have ready (you still press send)
     search: str | None = None         # shared folder: the words to look for inside files
     search_mode: str | None = None    # "find" (list them) | "open" (open the best) | None (only if Records has none)
+    site: str | None = None           # websites: a saved site id
+    site_name: str | None = None      # websites: a name said that isn't saved yet (we ask for the address)
+    volume_op: str | None = None      # Mac volume: up | down | mute | unmute | set
+    level: int | None = None          # Mac volume: 0-100 for "set"
+    question: str | None = None       # "unclear": what to ask back
 
 
 def any_of(text: str, words) -> bool:
@@ -226,10 +235,71 @@ def search_part(text: str, action: str) -> tuple[str | None, str | None]:
     return text.strip(), None
 
 
+HEARD_AS = [  # things Whisper writes for "on my Mac"
+    (r"\bon (?:melmah|mel mah|my mack|my mac book|mac book|my macbook|the mack|my mag|my mic|mimac|my max)\b", "on my mac"),
+]
+SITE_WORDS = ("website", "web site", "site", "webpage", "الموقع", "موقع")
+MAC_WORDS = ("mac", "laptop", "computer", "الماك", "اللابتوب", "الكمبيوتر")
+VOLUME_SET = re.compile(r"(?:volume|الصوت)\s+(?:to|at|الى|إلى)?\s*(\d{1,3})\b")
+MUTE_ONLY = ("mute", "اكتم", "كتم", "اكتم الصوت")
+UNMUTE = ("unmute", "sound on", "turn the sound back on", "شغل الصوت", "ارجع الصوت")
+
+
+def fix_hearing(said: str) -> str:
+    out = said or ""
+    for pat, rep in HEARD_AS:
+        out = re.sub(pat, rep, out, flags=re.IGNORECASE)
+    return out
+
+
+def mac_volume_intent(said: str, text: str, devs) -> Intent | None:
+    """The Mac's own sound: when the Mac is named, or no TV is added and "TV" isn't said."""
+    has_tv = any(d.kind == "tv" for d in devs)
+    if any_of(text, KIND_WORDS["tv"]) or (has_tv and not any_of(text, MAC_WORDS)):
+        return None
+    m = VOLUME_SET.search(text)
+    if m and int(m.group(1)) <= 100:
+        return Intent(action="mac_volume", text=text, volume_op="set", level=int(m.group(1)))
+    if any_of(text, UNMUTE):
+        return Intent(action="mac_volume", text=text, volume_op="unmute")
+    if any_of(text, MUTE_ONLY):
+        return Intent(action="mac_volume", text=text, volume_op="mute")
+    up = VOLUME_UP + ("increase the volume", "increase volume", "volume higher", "make it louder")
+    down = VOLUME_DOWN + ("decrease the volume", "reduce the volume", "decrease volume")
+    if any_of(text, up):
+        return Intent(action="mac_volume", text=text, volume_op="up")
+    if any_of(text, down):
+        return Intent(action="mac_volume", text=text, volume_op="down")
+    return None
+
+
+def site_intent(said: str, text: str, spoke_from: str) -> Intent | None:
+    saved = sites.load()
+    target = "mac" if any_of(text, apps.ON_MAC) else "phone" if any_of(text, apps.ON_PHONE) else \
+        ("mac" if spoke_from == "mac" else "phone")
+    for s in saved:
+        if any_of(text, s["words"]):
+            return Intent(action="site", text=text, site=s["id"], target=target)
+    if not any_of(text, SITE_WORDS):
+        return None
+    before = text.split(next(f" {normalise(w).strip()} " for w in SITE_WORDS if has(text, w)), 1)[0]
+    name = " ".join(w for w in before.split() if w not in FILLER and not any_of(f" {w} ", OPEN_WORDS)
+                    and w not in {"can", "you", "could", "would", "the", "my", "our", "please", "open"})
+    return Intent(action="site_unknown", text=text, site_name=(name.title() + " website").strip() if name else "our website",
+                  target=target)
+
+
 def parse(said: str, devs=None, spoke_from: str = "phone") -> Intent:
     """spoke_from: "mac" when the command came from the Mac's own page, else "phone"."""
+    said = fix_hearing(said)
     text = normalise(said)
     devs = device_list.current() if devs is None else devs
+    site = site_intent(said, text, spoke_from)
+    if site:
+        return site
+    volume = mac_volume_intent(said, text, devs)
+    if volume:
+        return volume
     app = app_intent(said, text, devs, spoke_from)
     if app:
         return app

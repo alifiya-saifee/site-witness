@@ -29,7 +29,7 @@ from pathlib import Path
 from fastapi import FastAPI, Header, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, Response
 
-from . import apps, devices, discover, library, speech, voice
+from . import apps, devices, discover, library, sites, speech, understand, voice
 from .connectors import roborock_vac
 from .commands import parse
 from .devices import may_use
@@ -53,6 +53,7 @@ class Hub:
         self.pair_fails: dict[str, list[float]] = {}  # device address -> times of wrong codes
         self.pair_fail_total = 0
         self.library: library.Library | None = None
+        self.pending: dict[str, dict] = {}       # a question asked back, per device ("What's the address?")
         self.helper: WebSocket | None = None
         self.results: dict[str, dict] = {}       # tap key -> first answer
         self.commands: dict[str, dict] = {}      # command id -> state, detail, proof
@@ -177,7 +178,8 @@ async def command(request: Request, x_session: str | None = Header(default=None)
     if key and key in hub.results:
         return hub.results[key] | {"repeat": True}
     lang = lang_of(said, body.get("lang"))
-    answer = await run_command(said, person, device, key, choose, lang, bool(body.get("also_mac")))
+    asker = "mac" if device == "this Mac" else f"s:{session_id(x_session or '')}"
+    answer = await run_command(said, person, device, key, choose, lang, bool(body.get("also_mac")), asker)
     if key:
         hub.results[key] = answer
     return answer
@@ -213,15 +215,61 @@ async def say_on_mac(rid: str) -> None:
     await hub.helper.send_json({"type": "speak", "reply_id": rid, "token": token})
 
 
+FILE_WORDS = ("file", "files", "report", "slides", "deck", "document", "pdf", "quote", "note", "notes", "letter",
+              "invoice", "contract", "ملف", "تقرير", "عرض", "ملاحظة", "مستند", "فاتورة", "عقد")
+
+
+async def understood(said: str, spoke_from: str) -> tuple:
+    """Groq first (if switched on), the word matcher as backup. Returns (intent, how)."""
+    devs = devices.current()
+    words = parse(said, devs, spoke_from)
+    if not understand.enabled():
+        return words, "word match"
+    g = await asyncio.to_thread(understand.understand, commands_fix(said), devs, spoke_from)
+    definite = bool(words.kind or words.action in ("app", "site", "mac_volume", "send") or words.matches or words.search_mode)
+    if g is not None and g.action != "unclear":
+        return g, "Groq"
+    if definite:
+        return words, "word match"
+    if g is not None:  # Groq wasn't sure either: ask back
+        return g, "Groq"
+    return words, "word match"
+
+
+def commands_fix(said: str) -> str:
+    from .commands import fix_hearing
+    return fix_hearing(said)
+
+
 async def run_command(said: str, person: str, device: str, key: str | None, choose: str | None,
-                      lang: str = "en", also_mac: bool = False) -> dict:
+                      lang: str = "en", also_mac: bool = False, asker: str = "mac") -> dict:
     name = PEOPLE[person]["name"]
     hub.log.append("command.heard", actor=name, content={"said": said, "device": device},
                    key=f"heard:{key}" if key else None)
-    intent = parse(said, spoke_from="mac" if device == "this Mac" else "phone")
     steps = [{"t": f"Heard “{said}”", "ok": True}]
+    pending = hub.pending.get(asker)
+    if pending and time.monotonic() - pending["at"] < 120 and not choose:
+        return await answer_question(pending, asker, said, person, steps, lang, also_mac)
+    hub.pending.pop(asker, None)
+    spoke_from = "mac" if device == "this Mac" else "phone"
+    if choose:
+        intent, how = parse(said, spoke_from=spoke_from), "word match"
+    else:
+        intent, how = await understood(said, spoke_from)
+    steps.append({"t": f"Understood by {how}", "ok": True})
+    hub.log.append("command.understood", actor="hub", content={"how": how, "action": intent.action})
     if intent.action == "app":
         return await run_app(intent, person, steps, lang, also_mac)
+    if intent.action == "mac_volume":
+        return await run_mac_volume(intent, person, steps, lang, also_mac)
+    if intent.action == "site":
+        return await run_site(intent.site, intent.target, person, steps, lang, also_mac)
+    if intent.action == "site_unknown":
+        return await ask_for_address(intent, asker, person, steps, lang, also_mac)
+    if intent.action == "unclear":
+        rep = await new_reply("ask_back", lang, also_mac, q=intent.question) if intent.question and lang == "en" \
+            else await new_reply("not_understood", lang, also_mac)
+        return {"status": "not_found", "steps": steps + [{"t": "Not sure what you meant", "ok": None}], "reply": rep}
     if intent.kind:
         dev = devices.by_id(choose[4:]) if choose and choose.startswith("dev:") else intent.device
         return await run_device(intent, dev, person, steps, lang, also_mac, choose)
@@ -234,8 +282,11 @@ async def run_command(said: str, person: str, device: str, key: str | None, choo
             return found
     if not matches:
         hub.log.append("file.not_found", actor="hub", content={"said": said})
-        return {"status": "not_found", "steps": steps + [{"t": "No file in Records matches that", "ok": False}],
-                "reply": await new_reply("not_found", lang, also_mac)}
+        from .commands import any_of
+        about_files = any_of(intent.text, FILE_WORDS)  # asked for a file: "couldn't find that file"; else be honest
+        return {"status": "not_found",
+                "steps": steps + [{"t": "No file in Records matches that" if about_files else "I didn't understand that", "ok": False}],
+                "reply": await new_reply("not_found" if about_files else "not_understood", lang, also_mac)}
     if len(matches) > 1:
         hub.log.append("file.ambiguous", actor="hub", content={"options": [r.id for r in matches]})
         return {"status": "choose", "steps": steps + [{"t": f"{len(matches)} files match. Which one?", "ok": None}],
@@ -345,6 +396,91 @@ async def open_shared(fid: int, person: str, steps: list, lang: str, also_mac: b
     await hub.helper.send_json({"type": "open_file", "command_id": cid, "file_id": fileid,
                                 "filename": fileid + path.suffix.lower(), "token": ftoken})
     return {"status": "sent", "command": cid, "steps": steps + [{"t": "Sent to the Mac", "ok": True}]}
+
+
+def mac_allowed(person: str) -> bool:
+    return PEOPLE[person]["role"] in ("owner", "broker")  # the Mac is the owner's machine
+
+
+async def to_helper(msg: dict, entry: dict, steps: list, lang: str, also_mac: bool) -> dict:
+    """Send one job to the Mac helper and let the page follow it (status, proof, spoken reply)."""
+    if hub.helper is None:
+        return {"status": "no_helper", "steps": steps + [{"t": "No helper is connected on the Mac", "ok": False}],
+                "reply": await new_reply("no_helper", lang, False)}
+    cid = uuid.uuid4().hex[:12]
+    hub.commands[cid] = {"state": "sent", "detail": "Sent to the Mac", "proof": None, "lang": lang,
+                         "also_mac": also_mac, "reply": None} | entry
+    await hub.helper.send_json(msg | {"command_id": cid})
+    return {"status": "sent", "command": cid, "steps": steps + [{"t": "Sent to the Mac", "ok": True}]}
+
+
+async def run_mac_volume(intent, person: str, steps: list, lang: str, also_mac: bool) -> dict:
+    name = PEOPLE[person]["name"]
+    if not mac_allowed(person):
+        return {"status": "refused", "steps": steps + [{"t": f"{name} may not change the Mac's volume", "ok": False}],
+                "reply": await new_reply("refused_mac_app", lang, also_mac, person=name)}
+    op = intent.volume_op
+    label = {"up": "Turn the Mac's volume up", "down": "Turn the Mac's volume down", "mute": "Mute the Mac",
+             "unmute": "Unmute the Mac", "set": f"Set the Mac's volume to {intent.level}"}[op]
+    hub.log.append("mac.volume", actor=name, content={"op": op, **({"level": str(intent.level)} if op == "set" else {})})
+    msg = {"type": "mac", "action": op} | ({"level": intent.level} if op == "set" else {})
+    return await to_helper(msg, {"mac": op}, steps + [{"t": label, "ok": True}], lang, also_mac)
+
+
+async def run_site(site_id: str, target: str, person: str, steps: list, lang: str, also_mac: bool) -> dict:
+    site = sites.get(site_id)
+    name = PEOPLE[person]["name"]
+    if not site:
+        return {"status": "not_found", "steps": steps + [{"t": "That website isn't saved any more", "ok": False}],
+                "reply": await new_reply("not_understood", lang, also_mac)}
+    hub.log.append("site.opened", actor=name, content={"site": site["name"], "where": target})
+    if target == "phone":
+        return {"status": "open_on_phone", "app": site["name"], "link": site["url"],
+                "steps": steps + [{"t": f"Open {site['name']} on this phone", "ok": True}],
+                "reply": await new_reply("phone_app", lang, also_mac, app=site["name"])}
+    if not mac_allowed(person):
+        return {"status": "refused", "steps": steps + [{"t": f"{name} may not open things on the Mac", "ok": False}],
+                "reply": await new_reply("refused_mac_app", lang, also_mac, person=name)}
+    return await to_helper({"type": "site", "site_id": site_id}, {"app": "site", "title": site["name"], "draft": False},
+                           steps + [{"t": f"Open {site['name']} on the Mac", "ok": True}], lang, also_mac)
+
+
+async def ask_for_address(intent, asker: str, person: str, steps: list, lang: str, also_mac: bool) -> dict:
+    """A website that isn't saved: ask for its address (only the owner may add one)."""
+    name = intent.site_name or "our website"
+    if PEOPLE[person]["role"] != "owner":
+        return {"status": "not_found", "steps": steps + [{"t": f"“{name}” isn't saved, and only the owner can add websites", "ok": False}],
+                "reply": await new_reply("site_owner_only", lang, also_mac, app=name)}
+    hub.pending[asker] = {"kind": "site_url", "name": name, "target": intent.target, "at": time.monotonic(), "tries": 0}
+    return {"status": "question", "question": f"What's the address of {name}?",
+            "steps": steps + [{"t": f"“{name}” isn't saved yet. Asking for its address", "ok": None}],
+            "reply": await new_reply("site_ask_url", lang, also_mac, app=name)}
+
+
+async def answer_question(pending: dict, asker: str, said: str, person: str, steps: list, lang: str, also_mac: bool) -> dict:
+    """The answer to "What's the address?": read it back and ask for one tap before saving."""
+    from .commands import any_of, normalise as norm
+    if any_of(norm(said), ("cancel", "never mind", "nevermind", "stop", "no", "الغاء", "إلغاء", "لا")):
+        hub.pending.pop(asker, None)
+        return {"status": "not_found", "steps": steps + [{"t": "Cancelled", "ok": None}],
+                "reply": await new_reply("site_cancelled", lang, also_mac)}
+    url = sites.from_speech(said)
+    if not url:
+        pending["tries"] += 1
+        if pending["tries"] >= 3:
+            hub.pending.pop(asker, None)
+        return {"status": "question", "question": f"What's the address of {pending['name']}?",
+                "steps": steps + [{"t": "That didn't sound like a web address", "ok": False}],
+                "reply": await new_reply("site_bad_url", lang, also_mac)}
+    hub.pending.pop(asker, None)
+    aid = uuid.uuid4().hex[:10]
+    hub.approvals[aid] = {"site_add": True, "name": pending["name"], "url": url, "target": pending["target"],
+                          "by": PEOPLE[person]["name"], "person": person, "done": False, "lang": lang, "also_mac": also_mac}
+    hub.log.append("approval.requested", actor="hub", content={"approval": aid, "action": "save website", "site": pending["name"]})
+    return {"status": "needs_approval", "approval": aid, "question": f"Save “{pending['name']}” as {url} and open it?",
+            "steps": steps + [{"t": f"Heard the address as {url}", "ok": True},
+                              {"t": "Check the address, then tap Approve to save it", "ok": None}],
+            "reply": await new_reply("site_confirm", lang, also_mac, app=pending["name"])}
 
 
 async def run_app(intent, person: str, steps: list, lang: str, also_mac: bool) -> dict:
@@ -700,6 +836,39 @@ async def add_ros(request: Request):
     return {"status": "added", "device": dev.id}
 
 
+@app.get("/api/sites")
+def sites_list(request: Request):
+    mac_only(request)
+    return sites.load()
+
+
+@app.post("/api/sites")
+async def sites_add(request: Request):
+    mac_only(request)
+    b = await request.json()
+    try:
+        row = sites.add(b.get("name", ""), b.get("url", ""), [w for w in str(b.get("words", "")).split(",")])
+    except sites.SiteError as e:
+        raise HTTPException(400, str(e))
+    hub.log.append("site.saved", actor="owner", content={"site": row["name"]})
+    return row
+
+
+@app.delete("/api/sites/{site_id}")
+def sites_remove(site_id: str, request: Request):
+    mac_only(request)
+    if not sites.remove(site_id):
+        raise HTTPException(404, "Not a saved website")
+    hub.log.append("site.removed", actor="owner", content={"site": site_id})
+    return {"status": "removed"}
+
+
+@app.get("/api/understanding")
+def understanding(request: Request, x_session: str | None = Header(default=None)):
+    who(request, x_session)
+    return {"groq": understand.enabled()}
+
+
 @app.get("/api/folder")
 def folder_info(request: Request):
     mac_only(request)
@@ -826,6 +995,19 @@ async def approve(aid: str, request: Request, x_session: str | None = Header(def
     a = hub.approvals.get(aid)
     if not a:
         raise HTTPException(404, "Unknown approval")
+    if a.get("site_add"):
+        if a["done"]:
+            return a["answer"] | {"repeat": True}
+        a["done"] = True
+        try:
+            row = sites.add(a["name"], a["url"], [a["name"].lower().replace(" website", "")])
+        except sites.SiteError as e:
+            raise HTTPException(400, str(e))
+        hub.log.append("approval.given", actor=a["by"], content={"approval": aid, "action": "save website", "site": row["name"]},
+                       key=f"approval:{aid}")
+        a["answer"] = await run_site(row["id"], a["target"], a["person"], [{"t": f"Saved “{row['name']}”", "ok": True}],
+                                     a["lang"], a["also_mac"])
+        return a["answer"] | {"then": a["answer"]["status"]}
     if "device" in a:
         if a.get("cancelled"):
             return {"status": "cancelled", "then": "cancelled", "note": "Cancelled: Stop was said before you approved",
@@ -992,7 +1174,13 @@ async def helper_ws(ws: WebSocket):
                 hub.robot_state[c["device"]] = {"state": msg["state"], "battery": msg.get("battery"),
                                                 "place": msg.get("place") or msg.get("target")}
             if c.get("reply") is None:  # attach the reply BEFORE the state changes: the page stops polling then
-                if "app" in c:
+                if "mac" in c:
+                    after = msg.get("after")
+                    outcome = ("mac_muted" if c["mac"] == "mute" else "mac_volume") if confirmed else \
+                        ("mac_volume_unsure" if msg.get("ok") else "app_failed")
+                    c["reply"] = await new_reply(outcome, c.get("lang", "en"), c.get("also_mac", False),
+                                                 after="" if after is None else after, app="the Mac")
+                elif "app" in c:
                     outcome = ("app_draft_mac" if c["draft"] else "app_mac") if confirmed else \
                         ("app_unconfirmed" if msg.get("ok") else "app_failed")
                     if confirmed and c["draft"] and c["app"] == "whatsapp":
@@ -1007,7 +1195,7 @@ async def helper_ws(ws: WebSocket):
             c["detail"] = str(msg.get("detail", ""))[:200]
             c["state"] = state
             what = {"device": c["device"], "action": c["action"]} if "device" in c else \
-                {"app": c["app"]} if "app" in c else {"file": c["file"]}
+                {"app": c["app"]} if "app" in c else {"mac": c["mac"]} if "mac" in c else {"file": c["file"]}
             hub.log.append("device.confirmed" if confirmed else "device.failed", actor="helper",
                            content={"command": msg["command_id"], **what, "detail": c["detail"]},
                            key=f"result:{msg['command_id']}")

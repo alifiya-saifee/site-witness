@@ -120,6 +120,17 @@ header span{font-size:12px;color:var(--muted)}
       <p class="hint" id="scanhint"></p>
     </section>
 
+    <section class="card" id="sitescard" hidden>
+      <p class="k">Websites (this Mac only)</p>
+      <p class="hint" style="margin:0 0 8px">The only websites the agent will open (“open Cosmique website on my Mac”). https only. You can also add one by voice: ask for it, then say its address and tap Approve.</p>
+      <div id="sites"></div>
+      <div class="found" style="border:0;padding:0">
+        <div class="row"><input type="text" id="sname" placeholder="Name, e.g. Cosmique website" aria-label="Website name"><input type="text" id="surl" placeholder="https://…" aria-label="Address"></div>
+        <div class="row"><input type="text" id="swords" placeholder="Other words people say, e.g. cosmique, cosmic, our website" aria-label="Other words"><button class="btn primary" type="button" id="sadd">Add</button></div>
+      </div>
+      <p class="hint" id="shint2"></p>
+    </section>
+
     <section class="card" id="foldercard" hidden>
       <p class="k">Shared folder (this Mac only)</p>
       <p class="hint" style="margin:0 0 8px">The only folder whose files can be searched by the words inside them (“open the report about the cracked balcony”). Nothing outside it is read. PDF, Word, text and Markdown files.</p>
@@ -195,7 +206,7 @@ Dock: 0, 0, 0</textarea></div>
 const $=s=>document.querySelector(s);
 const store={ get(k){ try{return localStorage.getItem(k);}catch(e){return null;} }, set(k,v){ try{localStorage.setItem(k,v);}catch(e){} } };
 let session=store.get('sw-session')||'', person=store.get('sw-person')||'layla', people=[], lastSaid='';
-const EXAMPLES=['open the Al Noor slides','open the report','send the Al Noor report to Karim','turn on the lamp','turn off the TV','volume up','open YouTube on the TV','print the Al Noor report','open YouTube on my Mac','open Mail','open Calendar','write an email saying the report is ready','open WhatsApp','WhatsApp message: I’ve sent the report','افتح التقويم على الماك','clean the kitchen','robot go to the meeting room','stop','open the report about the cracked balcony','find lift','افتح عرض النور','ابحث عن تسرب المياه'];
+const EXAMPLES=['open the Al Noor slides','open the report','send the Al Noor report to Karim','turn on the lamp','turn off the TV','volume up','open YouTube on the TV','print the Al Noor report','turn up the volume on my Mac','open Cosmique website on my Mac','open YouTube on my Mac','open Mail','open Calendar','write an email saying the report is ready','open WhatsApp','WhatsApp message: I’ve sent the report','افتح التقويم على الماك','clean the kitchen','robot go to the meeting room','stop','open the report about the cracked balcony','find lift','افتح عرض النور','ابحث عن تسرب المياه'];
 
 async function api(path,opts={}){
   let r;
@@ -331,8 +342,19 @@ function renderFound(found, box, hint){
   });
 }
 /* Shared folder + joined phones (Mac only) */
+function setupSites(){
+  $('#sitescard').hidden=false;
+  const show=async()=>{ try{ const list=await api('/api/sites');
+    $('#sites').innerHTML=list.length?list.map(x=>`<div class="dev"><span class="bulb" aria-hidden="true">🌐</span><div class="grow"><b>${esc(x.name)}</b><small>${esc(x.url)} · words: ${esc(x.words.join(', '))}</small></div><button class="btn" type="button" data-site="${esc(x.id)}">Remove</button></div>`).join(''):'<p class="hint">No websites yet.</p>';
+    $('#sites').querySelectorAll('[data-site]').forEach(b=>b.onclick=async()=>{ await api('/api/sites/'+b.dataset.site,{method:'DELETE'}); show(); }); }catch(e){} };
+  $('#sadd').onclick=async()=>{ try{ await api('/api/sites',{method:'POST',body:JSON.stringify({name:$('#sname').value,url:$('#surl').value,words:$('#swords').value})});
+      $('#shint2').textContent=`Added “${$('#sname').value}”.`; $('#sname').value=$('#surl').value=$('#swords').value=''; show(); }
+    catch(e){ $('#shint2').textContent=e.message; } };
+  show(); setInterval(show,8000);
+}
 function setupFolder(){
   if(!isLocal) return;
+  setupSites();
   $('#foldercard').hidden=false; $('#sessionscard').hidden=false;
   const roles=()=>[...document.querySelectorAll('[data-frole]:checked')].map(x=>x.dataset.frole);
   const show=async()=>{ try{ const f=await api('/api/folder'); $('#fpath').value=f.folder||f.default;
@@ -418,16 +440,19 @@ async function go(text, choose, lang){
     $('#approve').hidden=false; $('#aq').textContent=r.question; $('#aok').disabled=false;
     $('#aok').onclick=async()=>{ $('#aok').disabled=true; const a=await api('/api/approve/'+r.approval,{method:'POST'}); $('#approve').hidden=true;
       const done=r.steps.slice(0,-1).concat(a.steps||[{t:'Approved by you',ok:true},{t:a.note,ok:true}]);
-      drawSteps(done); playReply(a.reply); if(a.then==='sent') follow(a.command, done); refresh(); };
+      drawSteps(done); playReply(a.reply); if(a.then==='sent') follow(a.command, done); if(a.status==='open_on_phone') phoneButton(a); refresh(); };
   }
-  if(r.status==='open_on_phone'){
-    // phones only let a page open an app straight after a tap, so there is always a button; try at once too
-    $('#options').innerHTML=`<a class="btn primary app" href="${esc(r.link)}" target="_blank" rel="noopener">Open ${esc(r.app)}</a>`+(r.app==='WhatsApp'?'<p class="hint">You pick the chat and press send yourself. Nothing is sent for you.</p>':'');
-    if(navigator.userActivation&&navigator.userActivation.isActive){ try{ window.open(r.link,'_blank','noopener'); }catch(e){} }
-  }
+  if(r.status==='open_on_phone') phoneButton(r);
+  if(r.status==='question'){ $('#said').value=''; $('#said').placeholder='Say or type the address, e.g. https cosmique dot com'; $('#said').focus(); }
+  else $('#said').placeholder='open the Al Noor slides';
   playReply(r.reply);
   if(r.status==='sent') follow(r.command, r.steps);
   refresh();
+}
+/* phones only let a page open an app straight after a tap, so there is always a button; try at once too */
+function phoneButton(r){
+  $('#options').innerHTML=`<a class="btn primary app" href="${esc(r.link)}" target="_blank" rel="noopener">Open ${esc(r.app)}</a>`+(['WhatsApp','Mail'].includes(r.app)?'<p class="hint">You add who it’s to and press send yourself. Nothing is sent for you.</p>':'');
+  if(navigator.userActivation&&navigator.userActivation.isActive){ try{ window.open(r.link,'_blank','noopener'); }catch(e){} }
 }
 async function follow(cid, steps){
   const until=Date.now()+75000;  // printing can take up to a minute

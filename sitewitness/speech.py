@@ -31,6 +31,17 @@ def warm_up() -> None:
     threading.Thread(target=model, daemon=True).start()
 
 
+def hint() -> str:
+    """Words Whisper should expect: our phrases, app names, and every website the owner saved."""
+    try:
+        from .sites import hint_words
+        names = hint_words()
+    except Exception:
+        names = []
+    return ("Open the Al Noor slides on my Mac. Turn up the volume on my Mac. Open YouTube, WhatsApp, Mail, Calendar. "
+            "Open the Cosmique website. " + (" ".join(f"Open {n}." for n in names[:20])) + " افتح عرض النور على الماك.")[:600]
+
+
 def transcribe(audio: bytes, suffix: str = ".webm") -> dict:
     """Audio clip -> {"text", "language"}. Raises ValueError for an empty or too-large clip."""
     if not audio:
@@ -42,8 +53,8 @@ def transcribe(audio: bytes, suffix: str = ".webm") -> dict:
         f.flush()
         segments, info = model().transcribe(
             f.name, beam_size=1, vad_filter=True,
-            # helps Whisper spell the words this office uses
-            initial_prompt="Open the Al Noor slides. Send the report to Karim. افتح عرض النور.",
+            # helps Whisper spell the words this office uses (and "on my Mac", not "on Melmah")
+            initial_prompt=hint(),
         )
         text = " ".join(s.text.strip() for s in segments).strip()
     return {"text": text, "language": info.language}

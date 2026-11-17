@@ -46,6 +46,7 @@ Key: ⬜ to build · 🟢 done · ❓ open
 | Robots: Roborock vacuum + ROS 2 robot (rosbridge); every move needs a tap, Stop never does; pretend robots meanwhile | 🟡 ROS: passes against a real Nav2 + rosbridge simulation in Docker (`tools/ros-sim`); Roborock: passes against the library's official simulator; no real robot or Roborock account tried yet |
 | Search inside files: one shared folder chosen on the Mac (PDF, Word, text); “open the report about …”, “find …”, Arabic too | 🟢 built, tested, tried for real on this Mac (`sitewitness/library.py`) |
 | Pairing: wrong-code lock-out, new code after 20 wrong, joined-phones list with Remove | 🟢 built and tested; try Remove from your phone |
+| Understanding with Groq (menu-checked) + word match backup; Mac volume; saved websites (ask for the address by voice, tap to save); hearing fixes | 🟢 built and tested with Groq faked; real Groq needs `GROQ_API_KEY` in .env |
 | Home Assistant room hub client; commands logged and confirmed | ⬜ |
 | Hub hardware: Pi/mini PC, IR blaster, CEC, Wi-Fi plug | ⬜ |
 | Guiding mode for devices with no interface | ⬜ |

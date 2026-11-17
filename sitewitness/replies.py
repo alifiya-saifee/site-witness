@@ -72,6 +72,23 @@ TEXT = {
     "app_not_on_mac": ("The {app} app is only on your phone.", "تطبيق {app} موجود على جوالك فقط."),
     "refused_mac_app": ("Sorry, {person} isn't allowed to open apps on the Mac.",
                         "عذرًا، {person} لا يملك صلاحية فتح التطبيقات على الماك."),
+    # understanding, Mac volume, websites
+    "not_understood": ("Sorry, I didn't understand that. You can say: open the Al Noor slides, turn up the Mac's volume, "
+                       "or open YouTube on my Mac.",
+                       "عذرًا، لم أفهم. يمكنك أن تقول: افتح عرض النور، ارفع صوت الماك، أو افتح يوتيوب على الماك."),
+    "ask_back":    ("Just to check: {q}", "للتأكد: {q}"),
+    "mac_volume":  ("Done. The Mac's volume is now {after}.", "تم. صوت الماك الآن {after}."),
+    "mac_muted":   ("The Mac is muted.", "تم كتم صوت الماك."),
+    "mac_volume_unsure": ("I changed it, but I couldn't read the Mac's volume back.", "غيّرته، لكن لم أتمكن من قراءة صوت الماك."),
+    "site_ask_url": ("I don't have {app} saved yet. What's the address? Say it like: https cosmique dot com.",
+                     "لم أحفظ {app} بعد. ما العنوان؟ قله هكذا: https cosmique نقطة com."),
+    "site_bad_url": ("I couldn't make out an address. Say it like: https cosmique dot com, or say cancel.",
+                     "لم أفهم العنوان. قله هكذا: https cosmique نقطة com، أو قل إلغاء."),
+    "site_confirm": ("Check the address on the screen, then tap Approve to save {app} and open it.",
+                     "تحقق من العنوان على الشاشة، ثم اضغط موافقة لحفظ {app} وفتحه."),
+    "site_owner_only": ("{app} isn't saved, and only the owner can add websites. Ask them to add it on the Mac.",
+                        "{app} غير محفوظ، والمالك فقط يمكنه إضافة المواقع. اطلب منه إضافته من الماك."),
+    "site_cancelled": ("Okay, cancelled.", "حسنًا، تم الإلغاء."),
     # robots
     "approve_robot": ("{Robot_action} with {device}? Tap Approve.", "هل أنفّذ: {robot_action}؟ ({device}) اضغط موافقة."),
     "robot_start": ("Done. {Device} is cleaning.", "تم. بدأ التنظيف ({device})."),

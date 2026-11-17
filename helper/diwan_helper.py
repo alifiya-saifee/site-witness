@@ -34,7 +34,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-from sitewitness import apps, devices  # noqa: E402
+from sitewitness import apps, devices, sites  # noqa: E402
 from sitewitness.connectors.ipp_printer import Printer, PrinterError  # noqa: E402
 from sitewitness.connectors.plug import PlugError, TapoPlug  # noqa: E402
 from sitewitness.connectors.samsung_tv import SamsungTV  # noqa: E402
@@ -193,6 +193,77 @@ class Helper:
             return result | {"ok": True, "confirmed": True, "proof_b64": proof, "detail": f"{app.name} opened; {front} is in front"}
         return result | {"ok": True, "confirmed": False, "proof_b64": proof,
                          "detail": f"Opened {app.name}, but {front or 'another app'} is in front"}
+
+    # ---- the Mac's own sound (built-in osascript; no permission needed) ----
+    def _osa(self, script: str):
+        return self.run(["osascript", "-e", script])
+
+    def volume(self) -> tuple[int | None, bool | None]:
+        r = self._osa("get volume settings")
+        vol = re.search(r"output volume:(\d+)", r.stdout or "")
+        muted = re.search(r"output muted:(true|false)", r.stdout or "")
+        return (int(vol.group(1)) if vol else None), (muted.group(1) == "true" if muted else None)
+
+    def mac(self, msg: dict) -> dict:
+        result = {"type": "result", "command_id": msg.get("command_id"), "ok": False}
+        op = msg.get("action")
+        if msg.get("type") != "mac" or op not in ("up", "down", "mute", "unmute", "set"):
+            return result | {"detail": "Refused: not a Mac volume action"}
+        if not re.fullmatch(r"[0-9a-f]{12}", str(msg.get("command_id", ""))):
+            return result | {"detail": "Refused: bad command id"}
+        before, _ = self.volume()
+        if op in ("mute", "unmute"):
+            script = f"set volume output muted {'true' if op == 'mute' else 'false'}"
+        else:
+            level = msg.get("level") if op == "set" else (before or 0) + (10 if op == "up" else -10)
+            if not isinstance(level, int):
+                return result | {"detail": "Refused: the level must be a number"}
+            level = max(0, min(100, level))
+            script = f"set volume output volume {level} without output muted" if op != "down" or level > 0 \
+                else "set volume output volume 0"
+        if self._osa(script).returncode != 0:
+            return result | {"detail": "The Mac wouldn't change its volume"}
+        after, muted = self.volume()
+        if after is None:
+            return result | {"ok": True, "confirmed": False, "detail": "Changed, but couldn't read the volume back"}
+        if op == "mute":
+            ok = muted is True
+        elif op == "unmute":
+            ok = muted is False
+        elif op == "set":
+            ok = after == level
+        elif op == "up":
+            ok = after > (before or 0) or after == 100
+        else:
+            ok = after < (before or 100) or after == 0
+        return result | {"ok": True, "confirmed": ok, "before": before, "after": after, "muted": muted,
+                         "detail": f"Volume {before} → {after}" + (" (muted)" if muted else "")}
+
+    # ---- a website you saved (the address is read here, from run/sites.json; never sent by the hub) ----
+    def open_site(self, msg: dict) -> dict:
+        result = {"type": "result", "command_id": msg.get("command_id"), "ok": False}
+        site = sites.get(str(msg.get("site_id", "")))
+        if msg.get("type") != "site" or site is None or any(k in msg for k in ("url", "link")):
+            return result | {"detail": "Refused: not a saved website"}
+        if not re.fullmatch(r"[0-9a-f]{12}", str(msg.get("command_id", ""))):
+            return result | {"detail": "Refused: bad command id"}
+        try:
+            url = sites.check_url(site["url"])
+        except sites.SiteError as e:
+            return result | {"detail": f"Refused: {e}"}
+        if self.run(["open", url]).returncode != 0:
+            return result | {"detail": "The Mac would not open the website"}
+        deadline, front = time.monotonic() + min(self.wait, 6), ""
+        while True:
+            front = self.front_app()
+            if front in apps.BROWSERS or time.monotonic() > deadline:
+                break
+            time.sleep(0.4)
+        proof = self.screenshot()
+        if front in apps.BROWSERS:
+            return result | {"ok": True, "confirmed": True, "proof_b64": proof, "detail": f"{site['name']} opened in {front}"}
+        return result | {"ok": True, "confirmed": False, "proof_b64": proof,
+                         "detail": f"Opened {site['name']}, but {front or 'another app'} is in front"}
 
     def robot(self, dev, action: str, place: str | None, result: dict) -> dict:
         if action in ("clean", "goto") and place not in dev.place_names:
@@ -369,13 +440,16 @@ async def main():
                     kind = msg.get("type")
                     is_device = kind == "device"
                     what = f"{msg.get('action')} on {msg.get('device_id')}" if is_device else \
-                        f"open the app {msg.get('app')}" if kind == "app" else f"open {msg.get('file_id')}"
+                        f"open the app {msg.get('app')}" if kind == "app" else f"Mac volume {msg.get('action')}" \
+                        if kind == "mac" else f"open the website {msg.get('site_id')}" if kind == "site" \
+                        else f"open {msg.get('file_id')}"
                     print(f"  Diwan Helper: asked to {what}", flush=True)
 
                     # each command runs on its own, so "stop" is never stuck behind a robot that is still driving
                     async def work(m=msg, is_device=is_device, kind=kind):
                         try:
-                            job = helper.device if is_device else helper.open_app if kind == "app" else helper.open_file
+                            job = {"device": helper.device, "app": helper.open_app, "mac": helper.mac,
+                                   "site": helper.open_site}.get(kind, helper.open_file)
                             result = await asyncio.to_thread(job, m)
                         except Exception as e:  # never leave the hub waiting
                             result = {"type": "result", "command_id": m.get("command_id"), "ok": False,

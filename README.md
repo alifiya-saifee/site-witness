@@ -125,6 +125,24 @@ the Mac or the phone.
   ready” open with your text typed. **You add who it’s to and press send yourself.** No addresses or contacts are
   stored, and the text isn’t logged. (“email the Al Noor report to Karim” is still the file send that needs a tap.)
 
+## Understanding what you mean (Groq), Mac volume, your websites
+
+- **Groq (optional):** put `GROQ_API_KEY=…` in `.env`. Each sentence then goes to Groq with a short menu of what is
+  possible right now (file titles, app names, device names, website names), and Groq picks one item. Its answer is
+  checked against the menu; anything else is thrown away, and every rule (roles, Approve taps, checks) still applies.
+  Without a key, or if Groq is slow or busy, the built-in word match is used. **Sent to Groq:** the sentence and
+  those names. **Never:** file contents, website addresses, tokens or keys. The log only says which way a command
+  was understood.
+- **Mac volume:** “turn up the volume on my Mac”, “volume to 30”, “mute the Mac”, «ارفع الصوت على الماك». The
+  helper reads the volume back as proof. Owner and Broker only. (A TV's volume needs “TV” in the sentence.)
+- **Websites:** the Mac page's **Websites** card holds the only sites the agent will open (https only), with the
+  words people might say (“cosmique, cosmic, our website”). Ask for one that isn't saved and it asks
+  **“What's the address?”**: say “https cosmique dot com”, check the address on screen, tap **Approve**, and it is
+  saved and opened. Only the Owner can add sites. It never opens an address someone just says.
+- **Hearing:** Whisper is told to expect “on my Mac” and your website names, so “on Melmah” no longer happens; if
+  it still mishears, a small fix turns common mishearings back into “on my Mac”.
+- When it doesn't understand, it says so (and what you can say), instead of “I couldn't find that file”.
+
 ## Robots
 
 | Robot | Say | Checked by |
