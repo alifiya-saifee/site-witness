@@ -195,7 +195,7 @@ Dock: 0, 0, 0</textarea></div>
 const $=s=>document.querySelector(s);
 const store={ get(k){ try{return localStorage.getItem(k);}catch(e){return null;} }, set(k,v){ try{localStorage.setItem(k,v);}catch(e){} } };
 let session=store.get('sw-session')||'', person=store.get('sw-person')||'layla', people=[], lastSaid='';
-const EXAMPLES=['open the Al Noor slides','open the report','send the Al Noor report to Karim','turn on the lamp','turn off the TV','volume up','open YouTube on the TV','print the Al Noor report','open WhatsApp','WhatsApp message: I’ve sent the report','clean the kitchen','robot go to the meeting room','stop','open the report about the cracked balcony','find lift','افتح عرض النور','ابحث عن تسرب المياه'];
+const EXAMPLES=['open the Al Noor slides','open the report','send the Al Noor report to Karim','turn on the lamp','turn off the TV','volume up','open YouTube on the TV','print the Al Noor report','open YouTube on my Mac','open Mail','open Calendar','write an email saying the report is ready','open WhatsApp','WhatsApp message: I’ve sent the report','افتح التقويم على الماك','clean the kitchen','robot go to the meeting room','stop','open the report about the cracked balcony','find lift','افتح عرض النور','ابحث عن تسرب المياه'];
 
 async function api(path,opts={}){
   let r;

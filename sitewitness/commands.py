@@ -9,8 +9,10 @@
 - "turn off the TV", "volume up", "mute", "open YouTube" -> the TV (only once a TV has been added on the Mac)
 - "print the Al Noor report" / «اطبع تقرير النور»        -> print that file on the added printer (always a tap)
 - A device word with no such device added -> "no TV/printer is added yet", never a file.
-- "open WhatsApp" / «افتح واتساب» / "WhatsApp message: …" -> open that app on the phone you spoke on
-  ("open YouTube" goes to the TV when a TV is added, unless you say "on my phone").
+- "open WhatsApp" / «افتح واتساب» / "WhatsApp message: …" / "open Mail" / "open Calendar" ->
+  an app from the approved list, on the Mac if you say "on my Mac" / «على الماك», on the phone if you say
+  "on my phone", otherwise on the device you spoke on ("open YouTube" goes to the TV when one is added,
+  unless you name the Mac or the phone). "write an email saying …" opens a draft: you add who and press send.
 - "clean the kitchen", "robot go to the meeting room", "stop", «نظف المطبخ», «وقف» -> a robot.
 - "find cracked balcony", «ابحث عن تسرب المياه" -> list files in the shared folder with those words inside
 - "open the report about the cracked balcony" -> open the best match from the shared folder
@@ -22,7 +24,7 @@ import re
 from dataclasses import dataclass, field
 
 from . import devices as device_list
-from . import phone_apps
+from . import apps
 from .devices import KIND_WORDS, Device
 from .records import RECORDS, Record
 
@@ -68,7 +70,8 @@ class Intent:
     device_options: list[Device] = field(default_factory=list)   # several devices fit: ask which one
     place: str | None = None          # robots: the room or spot meant
     place_unknown: str | None = None  # robots: a place name the robot doesn't know
-    app: str | None = None            # phone apps: which app
+    app: str | None = None            # apps: which app (key in apps.APPS)
+    target: str | None = None         # apps: "mac" | "phone"
     message: str | None = None        # WhatsApp: text to have ready (you still press send)
     search: str | None = None         # shared folder: the words to look for inside files
     search_mode: str | None = None    # "find" (list them) | "open" (open the best) | None (only if Records has none)
@@ -188,17 +191,20 @@ def robot_intent(text: str, robots) -> Intent:
                   place_unknown=unknown)
 
 
-def phone_intent(said: str, text: str, devs) -> Intent | None:
-    app = next((k for k, a in phone_apps.APPS.items() if any_of(text, a[3])), None)
+def app_intent(said: str, text: str, devs, spoke_from: str = "phone") -> Intent | None:
+    """An app from the approved list, and where to open it: the Mac or the phone."""
+    draft = apps.EMAIL_DRAFT.search(said or "")
+    app = "mail" if draft else next((k for k, a in apps.APPS.items() if any_of(text, a.words)), None)
     if not app:
         return None
-    on_phone = any_of(text, phone_apps.ON_PHONE)
-    if app == "youtube" and not on_phone and any(d.kind == "tv" for d in devs):
+    on_mac, on_phone = any_of(text, apps.ON_MAC), any_of(text, apps.ON_PHONE)
+    if app == "youtube" and not (on_mac or on_phone) and any(d.kind == "tv" for d in devs):
         return None  # "open YouTube" means the TV once there is one
-    if app == "maps" and not (on_phone or any_of(text, OPEN_WORDS)):
+    if app == "maps" and not (on_mac or on_phone or any_of(text, OPEN_WORDS)):
         return None
-    return Intent(action="phone_app", text=text, app=app,
-                  message=phone_apps.message_text(said) if app == "whatsapp" else None)
+    target = "mac" if on_mac else "phone" if on_phone else ("mac" if spoke_from == "mac" else "phone")
+    message = apps.message_text(said, app) if app in ("whatsapp", "mail") else None
+    return Intent(action="app", text=text, app=app, target=target, message=message)
 
 
 def words_after(text: str, verbs) -> str:
@@ -220,12 +226,13 @@ def search_part(text: str, action: str) -> tuple[str | None, str | None]:
     return text.strip(), None
 
 
-def parse(said: str, devs=None) -> Intent:
+def parse(said: str, devs=None, spoke_from: str = "phone") -> Intent:
+    """spoke_from: "mac" when the command came from the Mac's own page, else "phone"."""
     text = normalise(said)
     devs = device_list.current() if devs is None else devs
-    phone = phone_intent(said, text, devs)
-    if phone:
-        return phone
+    app = app_intent(said, text, devs, spoke_from)
+    if app:
+        return app
     found = device_intent(text, devs)
     if found:  # a device word wins: "turn on the lamp" never opens a file
         return found

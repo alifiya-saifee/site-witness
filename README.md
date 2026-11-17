@@ -103,13 +103,27 @@ Only someone you give the 6-digit code to can join, and only from your Wi-Fi. A 
 make a new code. On the Mac, **Joined phones** lists every joined device with **Remove**, and **Remove all + new
 code** logs everyone out. Joining shares nothing from the phone: it only lets it send commands to this Mac.
 
-## Apps on your phone
+## Apps (on the Mac or on your phone)
 
-Say “open WhatsApp” / «افتح واتساب» (or YouTube, Google Maps) and the page shows a big **Open WhatsApp** button:
-one tap opens the app on the phone you spoke on. “WhatsApp message: I’ve sent the report” opens WhatsApp with that
-text typed. **You pick the chat and press send yourself**: nothing is ever sent for you, and no numbers or contacts
-are stored. (Phones only let a page open an app right after a tap, which is why there is a button.) “open YouTube”
-goes to the TV once a TV is added, unless you say “on my phone”.
+Where it opens: “… on my Mac” / «على الماك» → **the Mac**; “… on my phone” → **the phone**; nothing said → the
+device you spoke on (the Mac’s own page → the Mac). “open YouTube” goes to the TV once one is added, unless you name
+the Mac or the phone.
+
+| App | On the Mac | On the phone |
+|---|---|---|
+| YouTube | youtube.com in your browser | one-tap button |
+| WhatsApp | WhatsApp Web in your browser (the WhatsApp app if installed) | one-tap button |
+| Google Maps | in your browser | one-tap button |
+| Mail | the Mail app | your phone’s mail app |
+| Calendar | the Calendar app | not possible from a web page: it says so |
+| Phone dialler | not on the Mac: it says so | one-tap button |
+
+- On the Mac the helper checks the app really came to the front (`lsappinfo`, no permission needed) and takes a
+  screenshot. Only an app key and plain text are sent to it; the command is built from the list in
+  `sitewitness/apps.py`. Owner and Broker may open apps on the Mac; Visitors only on their own phone.
+- **Drafts, never sending:** “WhatsApp message: I’ve sent the report” and “write an email saying the report is
+  ready” open with your text typed. **You add who it’s to and press send yourself.** No addresses or contacts are
+  stored, and the text isn’t logged. (“email the Al Noor report to Karim” is still the file send that needs a tap.)
 
 ## Robots
 

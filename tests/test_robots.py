@@ -33,22 +33,22 @@ def own_files(monkeypatch, tmp_path):
 @pytest.mark.parametrize("said", ["open WhatsApp", "افتح واتساب", "open whatsapp on my phone"])
 def test_open_whatsapp(said):
     i = parse(said, DEVS)
-    assert i.action == "phone_app" and i.app == "whatsapp" and i.message is None
+    assert i.action == "app" and i.app == "whatsapp" and i.target == "phone" and i.message is None
 
 
 def test_whatsapp_message_is_typed_not_sent():
     i = parse("WhatsApp message: I've sent the report & the quote", DEVS)
     assert i.message == "I've sent the report & the quote"
-    from sitewitness import phone_apps
-    url = phone_apps.link("whatsapp", i.message)
+    from sitewitness import apps
+    url = apps.link("whatsapp", i.message)
     assert url.startswith("https://wa.me/?text=") and unquote(url.split("=", 1)[1]) == i.message and "&the" not in url
 
 
 def test_youtube_goes_to_the_tv_unless_on_my_phone():
     tv = from_found({"key": "tv-1", "kind": "tv", "label": "TV"}, "Living room TV", "Living room", ["owner"])
-    assert parse("open YouTube", DEVS).action == "phone_app"
+    assert parse("open YouTube", DEVS).target == "phone"
     assert parse("open YouTube", DEVS + [tv]).device.kind == "tv"
-    assert parse("open YouTube on my phone", DEVS + [tv]).action == "phone_app"
+    assert parse("open YouTube on my phone", DEVS + [tv]).target == "phone"
 
 
 # ---- robot words ----
@@ -272,10 +272,10 @@ def helper_ws(client):
 
 
 def test_hub_open_whatsapp_on_the_phone(client):
-    r = client.post("/api/command", json={"text": "WhatsApp message: meeting at 5", "person": "omar"}).json()
+    r = client.post("/api/command", json={"text": "on my phone WhatsApp message: meeting at 5", "person": "omar"}).json()
     assert r["status"] == "open_on_phone" and r["link"].startswith("https://wa.me/?text=meeting")
     assert "press send yourself" in r["reply"]["text"]
-    assert any(e["type"] == "phone.app_opened" for e in server.hub.log.list())
+    assert any(e["type"] == "app.opened" and e["content"]["where"] == "phone" for e in server.hub.log.list())
 
 
 def test_robot_moves_only_after_a_tap_and_stop_needs_none(client):

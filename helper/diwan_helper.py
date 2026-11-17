@@ -1,8 +1,8 @@
 """Diwan Helper: the small app on the computer that does what the hub asks, then proves it.
 
-It connects *out* to the hub on this Mac. It does three things, nothing else:
-open a file from Records, run one allowed action on a device someone added (plug, Samsung TV, printer),
-and play the hub's spoken replies.
+It connects *out* to the hub on this Mac. It does four things, nothing else:
+open a file (Records or the shared folder), open an app from the approved list (sitewitness/apps.py),
+run one allowed action on a device someone added (plug, Samsung TV, printer, robot), and play spoken replies.
 - It only accepts a file ID that is in Records, with a one-time token it has not used before.
 - It downloads the file from the hub (never opens a path it is sent), opens it in Preview,
   checks Preview really has it open, takes a screenshot as proof, and sends the result back.
@@ -34,7 +34,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-from sitewitness import devices  # noqa: E402
+from sitewitness import apps, devices  # noqa: E402
 from sitewitness.connectors.ipp_printer import Printer, PrinterError  # noqa: E402
 from sitewitness.connectors.plug import PlugError, TapoPlug  # noqa: E402
 from sitewitness.connectors.samsung_tv import SamsungTV  # noqa: E402
@@ -156,6 +156,43 @@ class Helper:
         r = self.tv_for(dev).do(action)
         keep = {k: r[k] for k in ("ok", "confirmed", "detail", "state", "before", "after", "muted", "app") if k in r}
         return result | keep
+
+    def front_app(self) -> str:
+        """The name of the app in front, from lsappinfo (built into macOS; no permission needed)."""
+        r = self.run(["lsappinfo", "info", "-only", "name", "front"])
+        if r.returncode != 0 or not r.stdout:
+            r = self.run(["sh", "-c", 'lsappinfo info -only name "$(lsappinfo front)"'])
+        m = re.search(r'"(?:LSDisplayName|name)"\s*=\s*"([^"]+)"', r.stdout or "")
+        return m.group(1) if m else ""
+
+    def open_app(self, msg: dict) -> dict:
+        """Open one app from the approved list. Only an app key and plain text come from the hub; the command
+        itself is built from the list here."""
+        result = {"type": "result", "command_id": msg.get("command_id"), "ok": False}
+        app = apps.APPS.get(str(msg.get("app")))
+        if msg.get("type") != "app" or app is None or not app.on_mac:
+            return result | {"detail": "Refused: not an app on the approved list"}
+        if any(k in msg for k in ("link", "url", "cmd", "command", "path")):
+            return result | {"detail": "Refused: apps are opened only from the list"}
+        if not re.fullmatch(r"[0-9a-f]{12}", str(msg.get("command_id", ""))):
+            return result | {"detail": "Refused: bad command id"}
+        text = msg.get("text")
+        if text is not None and (not isinstance(text, str) or len(text) > 1000):
+            return result | {"detail": "Refused: the text must be plain and at most 1,000 characters"}
+        if self.run(apps.mac_command(app.key, text)).returncode != 0:
+            return result | {"detail": f"The Mac would not open {app.name}"}
+        want = apps.expected_front(app.key)
+        deadline, front = time.monotonic() + min(self.wait, 6), ""
+        while True:
+            front = self.front_app()
+            if front in want or time.monotonic() > deadline:
+                break
+            time.sleep(0.4)
+        proof = self.screenshot()
+        if front in want:
+            return result | {"ok": True, "confirmed": True, "proof_b64": proof, "detail": f"{app.name} opened; {front} is in front"}
+        return result | {"ok": True, "confirmed": False, "proof_b64": proof,
+                         "detail": f"Opened {app.name}, but {front or 'another app'} is in front"}
 
     def robot(self, dev, action: str, place: str | None, result: dict) -> dict:
         if action in ("clean", "goto") and place not in dev.place_names:
@@ -329,14 +366,17 @@ async def main():
                             await ws.send(json.dumps(r))
                         asyncio.create_task(play())
                         continue
-                    is_device = msg.get("type") == "device"
-                    what = f"{msg.get('action')} on {msg.get('device_id')}" if is_device else f"open {msg.get('file_id')}"
+                    kind = msg.get("type")
+                    is_device = kind == "device"
+                    what = f"{msg.get('action')} on {msg.get('device_id')}" if is_device else \
+                        f"open the app {msg.get('app')}" if kind == "app" else f"open {msg.get('file_id')}"
                     print(f"  Diwan Helper: asked to {what}", flush=True)
 
                     # each command runs on its own, so "stop" is never stuck behind a robot that is still driving
-                    async def work(m=msg, is_device=is_device):
+                    async def work(m=msg, is_device=is_device, kind=kind):
                         try:
-                            result = await asyncio.to_thread(helper.device if is_device else helper.open_file, m)
+                            job = helper.device if is_device else helper.open_app if kind == "app" else helper.open_file
+                            result = await asyncio.to_thread(job, m)
                         except Exception as e:  # never leave the hub waiting
                             result = {"type": "result", "command_id": m.get("command_id"), "ok": False,
                                       "detail": f"Helper error: {type(e).__name__}"}

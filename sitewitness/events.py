@@ -20,6 +20,7 @@ TYPES = {
     "device.removed",
     "network.scanned",     # the Mac listened for devices on the Wi-Fi (it controls nothing)
     "approval.cancelled",  # a waiting approval was dropped (e.g. "stop" was said first)
+    "app.opened",          # an app from the approved list was opened (which, where, whether a draft; never the text)
     "phone.app_opened",    # an app was opened on the phone that asked (after a tap; nothing sent for you)
     "folder.shared",       # the owner chose a folder to search (on the Mac); who may open its files
     "folder.indexed",      # the shared folder was read: counts only, never contents

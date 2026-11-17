@@ -29,7 +29,7 @@ from pathlib import Path
 from fastapi import FastAPI, Header, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, Response
 
-from . import devices, discover, library, phone_apps, speech, voice
+from . import apps, devices, discover, library, speech, voice
 from .connectors import roborock_vac
 from .commands import parse
 from .devices import may_use
@@ -218,10 +218,10 @@ async def run_command(said: str, person: str, device: str, key: str | None, choo
     name = PEOPLE[person]["name"]
     hub.log.append("command.heard", actor=name, content={"said": said, "device": device},
                    key=f"heard:{key}" if key else None)
-    intent = parse(said)
+    intent = parse(said, spoke_from="mac" if device == "this Mac" else "phone")
     steps = [{"t": f"Heard “{said}”", "ok": True}]
-    if intent.action == "phone_app":
-        return await run_phone_app(intent, name, steps, lang, also_mac)
+    if intent.action == "app":
+        return await run_app(intent, person, steps, lang, also_mac)
     if intent.kind:
         dev = devices.by_id(choose[4:]) if choose and choose.startswith("dev:") else intent.device
         return await run_device(intent, dev, person, steps, lang, also_mac, choose)
@@ -347,15 +347,43 @@ async def open_shared(fid: int, person: str, steps: list, lang: str, also_mac: b
     return {"status": "sent", "command": cid, "steps": steps + [{"t": "Sent to the Mac", "ok": True}]}
 
 
-async def run_phone_app(intent, name: str, steps: list, lang: str, also_mac: bool) -> dict:
-    """Open an app on the phone you spoke on. The phone opens it (after a tap); nothing is sent for you."""
-    title = phone_apps.APPS[intent.app][0]
-    url = phone_apps.link(intent.app, intent.message)
-    hub.log.append("phone.app_opened", actor=name, content={"app": intent.app, "with_text": "yes" if intent.message else "no"})
-    steps = steps + [{"t": f"Open {title} on this phone" + (" with your message typed (you press send)" if intent.message else ""),
-                      "ok": True}]
-    rep = await new_reply("phone_message" if intent.message else "phone_app", lang, also_mac, app=title)
-    return {"status": "open_on_phone", "app": title, "link": url, "steps": steps, "reply": rep}
+async def run_app(intent, person: str, steps: list, lang: str, also_mac: bool) -> dict:
+    """Open an app from the approved list, on the phone (a one-tap button) or on this Mac (the helper).
+    Drafts are typed, never sent: you add who it's to and press send yourself."""
+    name, app = PEOPLE[person]["name"], apps.APPS[intent.app]
+    title = app.name
+    draft = " with your text typed (you press send)" if intent.message else ""
+    log = {"app": app.key, "where": intent.target, "with_text": "yes" if intent.message else "no"}  # never the text
+    if intent.target == "phone":
+        if not app.phone:
+            return {"status": "not_found", "steps": steps + [{"t": f"{title} can't be opened on a phone from a web page", "ok": False}],
+                    "reply": await new_reply("app_not_on_phone", lang, also_mac, app=title)}
+        hub.log.append("app.opened", actor=name, content=log)
+        rep = await new_reply(("mail_draft_phone" if app.key == "mail" else "phone_message") if intent.message
+                              else "phone_app", lang, also_mac, app=title)
+        return {"status": "open_on_phone", "app": title, "link": apps.link(app.key, intent.message),
+                "steps": steps + [{"t": f"Open {title} on this phone{draft}", "ok": True}], "reply": rep}
+    # the Mac
+    if not app.on_mac:
+        return {"status": "not_found", "steps": steps + [{"t": f"{title} is only on your phone", "ok": False}],
+                "reply": await new_reply("app_not_on_mac", lang, also_mac, app=title)}
+    if PEOPLE[person]["role"] not in ("owner", "broker"):  # the Mac is the owner's machine
+        hub.log.append("access.refused", actor="hub", content={"app": app.key, "person": person, "where": "mac"})
+        return {"status": "refused", "steps": steps + [{"t": f"{name} may not open apps on the Mac", "ok": False}],
+                "reply": await new_reply("refused_mac_app", lang, also_mac, person=name)}
+    steps = steps + [{"t": f"Open {title} on the Mac{draft}", "ok": True}]
+    if hub.helper is None:
+        return {"status": "no_helper", "steps": steps + [{"t": "No helper is connected on the Mac", "ok": False}],
+                "reply": await new_reply("no_helper", lang, False)}
+    cid = uuid.uuid4().hex[:12]
+    hub.commands[cid] = {"state": "sent", "detail": "Sent to the Mac", "app": app.key, "title": title,
+                         "draft": bool(intent.message), "proof": None, "lang": lang, "also_mac": also_mac, "reply": None}
+    hub.log.append("app.opened", actor=name, content=log | {"command": cid})
+    msg = {"type": "app", "command_id": cid, "app": app.key}
+    if intent.message:
+        msg["text"] = intent.message
+    await hub.helper.send_json(msg)
+    return {"status": "sent", "command": cid, "steps": steps + [{"t": "Sent to the Mac", "ok": True}]}
 
 
 def say_action(action: str) -> str:
@@ -964,7 +992,13 @@ async def helper_ws(ws: WebSocket):
                 hub.robot_state[c["device"]] = {"state": msg["state"], "battery": msg.get("battery"),
                                                 "place": msg.get("place") or msg.get("target")}
             if c.get("reply") is None:  # attach the reply BEFORE the state changes: the page stops polling then
-                if "device" in c:
+                if "app" in c:
+                    outcome = ("app_draft_mac" if c["draft"] else "app_mac") if confirmed else \
+                        ("app_unconfirmed" if msg.get("ok") else "app_failed")
+                    if confirmed and c["draft"] and c["app"] == "whatsapp":
+                        outcome = "whatsapp_draft_mac"
+                    c["reply"] = await new_reply(outcome, c.get("lang", "en"), c.get("also_mac", False), app=c["title"])
+                elif "device" in c:
                     outcome, kw = device_outcome(c, msg, confirmed)
                     c["reply"] = await new_reply(outcome, c.get("lang", "en"), c.get("also_mac", False), **kw)
                 else:
@@ -972,7 +1006,8 @@ async def helper_ws(ws: WebSocket):
                                                  title=c.get("title", ""))
             c["detail"] = str(msg.get("detail", ""))[:200]
             c["state"] = state
-            what = {"device": c["device"], "action": c["action"]} if "device" in c else {"file": c["file"]}
+            what = {"device": c["device"], "action": c["action"]} if "device" in c else \
+                {"app": c["app"]} if "app" in c else {"file": c["file"]}
             hub.log.append("device.confirmed" if confirmed else "device.failed", actor="helper",
                            content={"command": msg["command_id"], **what, "detail": c["detail"]},
                            key=f"result:{msg['command_id']}")
