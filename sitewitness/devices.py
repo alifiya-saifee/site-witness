@@ -166,11 +166,13 @@ def save_added(devs: list[Device], path: Path | None = None) -> None:
 
 
 def current(env=os.environ) -> tuple[Device, ...]:
-    """Every device the agent may use right now."""
+    """Every device the agent may use right now. Pretend ones (lamp, vacuum, office robot) only with SW_DEMO=1;
+    the lamp is real when its Tapo plug is set up."""
     added = load_added()
-    lamp = [LAMP] if tapo_settings(env) or not added else []
+    is_demo = env.get("SW_DEMO") == "1"
+    lamp = [LAMP] if tapo_settings(env) or (is_demo and not added) else []
     subs = {d.sub for d in added if d.kind == "robot"}
-    pretend_robots = [r for r in (PRETEND_VACUUM, PRETEND_ROS) if r.sub not in subs]
+    pretend_robots = [r for r in (PRETEND_VACUUM, PRETEND_ROS) if r.sub not in subs] if is_demo else []
     return tuple(lamp + added + pretend_robots)
 
 

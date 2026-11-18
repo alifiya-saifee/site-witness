@@ -30,7 +30,7 @@ The first time, open `http://localhost:8040` on the Mac and type the owner's nam
   this Mac’s own certificate). Browsers only allow a mic on secure pages, so plain `http` is for this Mac only.
 - A phone is always the person you chose when you allowed it. The Mac's own page is the owner, and can try a command
   as someone else to see what they may do. Visitors are refused; “open the report” asks which one;
-  “send … to …” waits for your tap and, in this demo, only logs “would send”. Nothing is emailed.
+  “send … to …” waits for your tap, then makes a Mail draft (or brings the file to your phone to share): you press send.
 - macOS asks once for **Screen Recording** (the proof screenshot) and once to let Terminal **control Preview**
   (the “is it really open?” check). If you say no, the page shows “couldn’t confirm” instead of pretending.
 - The helper only opens files listed in `sitewitness/records.py`, each download needs a one-time token, and it never
@@ -85,18 +85,38 @@ committed). Once a real device is added, the pretend lamp goes away.
 
 The helper only runs the actions each kind allows (for example a plug has no volume) on devices in the list.
 
-## Search inside files (one shared folder)
+## Your Records: shared folders
 
-On the Mac page, **Shared folder** → keep `~/Documents/Diwan Shared` (or pick another folder inside your home
-folder) → tick who may open its files → **Share this folder**. **Add sample files** copies in 3 made-up reports.
-Then say “open the report about the cracked balcony”, “find lift” or «ابحث عن تسرب المياه».
+There are no built-in files. **Records are the folders you share** on the Mac page (**Shared folders**). Share as many
+as you like (up to 10). Each has its own list of who may use it: for example "Team files" for owner and broker, and
+"Owner only" just for you. Then say "open the report about the cracked balcony", "find lift", "send the lift note to
+Omar" or «ابحث عن تسرب المياه».
 
-- Only that folder is ever read: PDF, Word (.docx), text and Markdown; hidden files, links leading out of the folder
-  and files over 20 MB are skipped. Your home folder itself, Library, Desktop, Downloads, iCloud and hidden folders
-  can't be shared. **Stop sharing** forgets the folder and deletes the search index.
-- The index (`run/search.db`) is updated every minute, or with **Re-index**. File contents never go in the event log.
-- The 4 Records files still come first; the shared folder is searched when you say “about …” / “find …”, or when
-  nothing in Records matches. A scanned PDF with no text inside is found only by its name (no OCR yet).
+- Only those folders are ever read: PDF, Word (.docx), text and Markdown. Hidden files, links leading out of a
+  folder, and files over 20 MB are skipped.
+- Your home folder itself, Library, Desktop, Downloads, iCloud and hidden folders can't be shared.
+- **Change who** edits a folder's roles. **Stop sharing** forgets one folder; its files are never touched.
+- The index (`run/search.db`) follows the folders live. File contents never go in the event log.
+- A person only ever sees, opens or sends files from folders their role may use, even if they know a file's number.
+- A scanned PDF with no text inside is found only by its name (no OCR yet).
+- **Add made-up sample files** copies 3 made-up reports into the first folder.
+
+## Sending: you approve, then you press send
+
+"Send the lift note to Omar" finds the file in your shared folders and asks **Send "Lift note" to Omar? Approve**.
+
+- **Approved on the Mac:** Mail opens a new email to Omar's address (from **People**) with the file attached. You
+  check it and press send. macOS asks once to let Terminal control Mail.
+- **Approved on a phone:** the file comes to that phone, and **Share…** opens the phone's share sheet (WhatsApp,
+  Mail…). You pick Omar and press send.
+- Nothing is ever sent for you, and every approval is logged.
+
+## Demo mode (`SW_DEMO=1`)
+
+Only with `SW_DEMO=1` in `.env` do the made-up sample parts appear: the 4 sample Records (Al Noor slides and report,
+Marina quote, clinic report), the pretend lamp, the pretend robot vacuum and the pretend office robot. Without it,
+the page shows only your shared folders and the devices you really added. Printing still uses the sample Records
+only (printing from shared folders is not built yet).
 
 ## The phone app, from anywhere (Tailscale)
 

@@ -101,11 +101,15 @@ def test_a_step_needing_a_tap_waits_and_the_rest_runs_after_approve(client, groq
     assert [s["state"] for s in p["steps"]] == ["needs_approval", "waiting"]
     assert "Omar" in p["steps"][0]["question"] and "tap" in p["reply"]["text"]
     client.post(f"/api/approve/{p['steps'][0]['approval']}")
+    m = ws.receive_json()  # approved on the Mac: a Mail draft to Omar (never sent)
+    assert m["type"] == "mail_draft" and m["to_email"] == "omar@example.com" and m["file_id"] == "alnoor-report"
+    ws.send_json({"type": "result", "command_id": m["command_id"], "ok": True, "confirmed": True, "detail": "Mail draft ready"})
     m = ws.receive_json()
     assert m["type"] == "mac" and m["action"] == "up"
     done(ws, m, after=60)
     p = plan_until(client, r["plan"])
     assert [s["state"] for s in p["steps"]] == ["done", "done"]
+    assert "Mail" in p["steps"][0]["detail"]
     ws.__exit__(None, None, None)
 
 

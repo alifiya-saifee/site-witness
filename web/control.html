@@ -172,12 +172,13 @@ header span{font-size:12px;color:var(--muted)}
     </section>
 
     <section class="card" id="foldercard" hidden>
-      <p class="k">Shared folder (this Mac only)</p>
-      <p class="hint" style="margin:0 0 8px">The only folder whose files can be searched by the words inside them (“open the report about the cracked balcony”). Nothing outside it is read. PDF, Word, text and Markdown files.</p>
+      <p class="k">Shared folders: your Records (this Mac only)</p>
+      <p class="hint" style="margin:0 0 8px">The folders the agent may open, search inside and send from (“open the report about the cracked balcony”, “send the lift note to Omar”). Each folder has its own list of who may use it. Nothing outside them is read. PDF, Word, text and Markdown files.</p>
+      <div id="flist"></div>
       <div class="found" style="border:0;padding:0">
         <div class="row"><input type="text" id="fpath" aria-label="Folder to share"></div>
-        <div class="row"><label class="tog"><input type="checkbox" data-frole="owner" checked> owner</label><label class="tog"><input type="checkbox" data-frole="broker" checked> broker</label><label class="tog"><input type="checkbox" data-frole="visitor"> visitor</label><span class="hint" style="margin:0">may open files from it</span></div>
-        <div class="row"><button class="btn primary" type="button" id="fshare">Share this folder</button><button class="btn" type="button" id="freindex">Re-index</button><button class="btn" type="button" id="fsamples">Add sample files</button><button class="btn" type="button" id="funshare">Stop sharing</button></div>
+        <div class="row"><label class="tog"><input type="checkbox" data-frole="owner" checked> owner</label><label class="tog"><input type="checkbox" data-frole="broker" checked> broker</label><label class="tog"><input type="checkbox" data-frole="engineer"> engineer</label><label class="tog"><input type="checkbox" data-frole="visitor"> visitor</label><span class="hint" style="margin:0">may open files from it</span></div>
+        <div class="row"><button class="btn primary" type="button" id="fshare">Share this folder</button><button class="btn" type="button" id="freindex">Re-read all</button><button class="btn" type="button" id="fsamples">Add made-up sample files</button></div>
       </div>
       <p class="hint" id="fhint"></p>
     </section>
@@ -260,7 +261,8 @@ Dock: 0, 0, 0</textarea></div>
 const $=s=>document.querySelector(s);
 const store={ get(k){ try{return localStorage.getItem(k);}catch(e){return null;} }, set(k,v){ try{localStorage.setItem(k,v);}catch(e){} } };
 let session=store.get('sw-session')||'', person=store.get('sw-person')||'', people=[], lastSaid='', waitTimer=null;
-const EXAMPLES=['open the Al Noor slides','open the report','send the Al Noor report to Karim','turn on the lamp','turn off the TV','volume up','open YouTube on the TV','print the Al Noor report','turn up the volume on my Mac','open Cosmique website on my Mac','open YouTube on my Mac','open Mail','open Calendar','write an email saying the report is ready','open WhatsApp','WhatsApp message: I’ve sent the report','افتح التقويم على الماك','clean the kitchen','robot go to the meeting room','stop','open the report about the cracked balcony','find lift','افتح عرض النور','ابحث عن تسرب المياه'];
+const EXAMPLES_REAL=['find my CV','open the report about the cracked balcony','send the lift note to Omar','open Calendar on my Mac','turn up the volume on my Mac','what’s the volume on my Mac?','open YouTube on my Mac','write an email saying the report is ready','open WhatsApp','stop','ابحث عن تسرب المياه','افتح التقويم على الماك'];
+let EXAMPLES=['open the Al Noor slides','open the report','send the Al Noor report to Karim','turn on the lamp','turn off the TV','volume up','open YouTube on the TV','print the Al Noor report','turn up the volume on my Mac','open Cosmique website on my Mac','open YouTube on my Mac','open Mail','open Calendar','write an email saying the report is ready','open WhatsApp','WhatsApp message: I’ve sent the report','افتح التقويم على الماك','clean the kitchen','robot go to the meeting room','stop','open the report about the cracked balcony','find lift','افتح عرض النور','ابحث عن تسرب المياه'];
 
 async function api(path,opts={}){
   let r;
@@ -294,6 +296,7 @@ async function start(){
   isLocal=!!info.local;
   if(!isLocal || !people.some(p=>p.id===person)) person=info.me;
   $('#peoplehint').textContent=isLocal?'You are the owner at the Mac. Pick someone else to try a command as them and see what they may do.':'This phone belongs to the person above. To change it, the owner removes the phone on the Mac and you join again.';
+  if(!info.demo) EXAMPLES=EXAMPLES_REAL;
   drawPeople(); drawChips(); setupMic(); setupReplies(info.local); setupScan(); refresh(); setInterval(refresh,3000);
 }
 $('#join').onclick=async()=>{
@@ -484,14 +487,17 @@ function setupFolder(){
   setupSites();
   $('#foldercard').hidden=false; $('#sessionscard').hidden=false;
   const roles=()=>[...document.querySelectorAll('[data-frole]:checked')].map(x=>x.dataset.frole);
-  const show=async()=>{ try{ const f=await api('/api/folder'); $('#fpath').value=f.folder||f.default;
-    $('#fhint').textContent=f.folder?`Shared: ${f.folder}`+(f.counts?` · ${f.counts.files} files${f.counts.no_text?`, ${f.counts.no_text} with no text inside (scans)`:''}`:'')+` · may open: ${f.roles.join(', ')}`:'Nothing is shared yet.';
-    if(f.folder) document.querySelectorAll('[data-frole]').forEach(x=>x.checked=f.roles.includes(x.dataset.frole)); }catch(e){} };
+  const show=async()=>{ try{ const f=await api('/api/folder');
+    if(!$('#fpath').value) $('#fpath').value=f.default;
+    $('#flist').innerHTML=f.folders.length?f.folders.map(x=>`<div class="dev"><span class="bulb" aria-hidden="true">📁</span><div class="grow"><b>${esc(x.name)}</b><small>${esc(x.folder)} · ${x.files} files · may use: ${esc(x.roles.join(', '))}</small></div><button class="btn" type="button" data-fedit="${esc(x.folder)}">Change who</button><button class="btn" type="button" data-funs="${esc(x.folder)}">Stop sharing</button></div>`).join(''):'<p class="hint">Nothing is shared yet, so there are no Records to open or send. Share a folder below.</p>';
+    $('#flist').querySelectorAll('[data-funs]').forEach(b=>b.onclick=()=>act('/api/folder?folder='+encodeURIComponent(b.dataset.funs),{method:'DELETE'},'Stopping…'));
+    $('#flist').querySelectorAll('[data-fedit]').forEach(b=>b.onclick=()=>{ const x=f.folders.find(y=>y.folder===b.dataset.fedit); $('#fpath').value=x.folder;
+      document.querySelectorAll('[data-frole]').forEach(c=>c.checked=x.roles.includes(c.dataset.frole)); $('#fhint').textContent='Tick who may use it, then tap “Share this folder” to save.'; });
+    $('#fhint').textContent=f.counts?`${f.counts.files} files in all`+(f.counts.no_text?`, ${f.counts.no_text} with no text inside (scans)`:''):''; }catch(e){} };
   const act=async(path,opts,busy)=>{ $('#fhint').textContent=busy; try{ await api(path,opts); }catch(e){ $('#fhint').textContent=e.message; return; } show(); refresh(); };
   $('#fshare').onclick=()=>act('/api/folder',{method:'POST',body:JSON.stringify({folder:$('#fpath').value,roles:roles()})},'Sharing and reading the files…');
   $('#freindex').onclick=()=>act('/api/folder/reindex',{method:'POST'},'Reading the files…');
   $('#fsamples').onclick=()=>act('/api/folder/samples',{method:'POST'},'Adding 3 made-up reports…');
-  $('#funshare').onclick=()=>act('/api/folder',{method:'DELETE'},'Stopping…');
   show();
   $('#peoplecard').hidden=false;
   const opts=()=>people.map(p=>`<option value="${esc(p.id)}">${esc(p.name)} (${esc(p.role)})</option>`).join('');
@@ -595,7 +601,7 @@ async function go(text, choose, lang, where){
       catch(e){ $('#aok').disabled=false; if(e.message==='needs_check') showCheck(()=>$('#aok').click()); else $('#aq').textContent=e.message; return; }
       $('#approve').hidden=true;
       const done=r.steps.slice(0,-1).concat(a.steps||[{t:'Approved by you',ok:true},{t:a.note,ok:true}]);
-      drawSteps(done); playReply(a.reply); if(a.then==='sent') follow(a.command, done); if(a.status==='open_on_phone') phoneButton(a); refresh(); };
+      drawSteps(done); playReply(a.reply); if(a.then==='sent') follow(a.command, done); if(a.then==='file') fileReady(a); if(a.status==='open_on_phone') phoneButton(a); refresh(); };
   }
   if(r.status==='open_on_phone') phoneButton(r);
   if(r.status==='question'){ $('#said').value=''; $('#said').placeholder='Say or type the address, e.g. https cosmique dot com'; $('#said').focus(); }
@@ -696,7 +702,7 @@ async function refresh(){
       catch(e){ b.textContent=was; b.disabled=false; $('#devhint').textContent='Couldn’t learn it: '+e.message; } });
     $('#devices').querySelectorAll('[data-stop]').forEach(b=>b.onclick=()=>go('stop '+b.dataset.stop));
     $('#devices').querySelectorAll('[data-rm]').forEach(b=>b.onclick=async()=>{ await api('/api/devices/'+b.dataset.rm,{method:'DELETE'}); refresh(); });
-    $('#devhint').textContent=devs.some(d=>d.pretend)?'No real device is added yet, so this is a pretend lamp on the screen. On the Mac, use “Scan my Wi-Fi” to add your TV or printer.':'Only these devices can be controlled, and only by the people shown.';
+    $('#devhint').textContent=!devs.length?'No devices added yet. On the Mac, use “Scan my Wi-Fi” or “Scan Bluetooth” to add your TV, printer, lamp or robot.':devs.some(d=>d.pretend)?'No real device is added yet, so this is a pretend lamp on the screen. On the Mac, use “Scan my Wi-Fi” to add your TV or printer.':'Only these devices can be controlled, and only by the people shown.';
     const ev=await api('/api/events');
     $('#log').innerHTML=ev.map(e=>`<div>${esc(e.at.slice(11,19))} ${esc(e.type)} · ${esc(e.actor)} ${esc(Object.values(e.content).filter(v=>typeof v==='string').join(' · '))}</div>`).join('');
   }catch(e){}

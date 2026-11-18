@@ -30,7 +30,7 @@ from dataclasses import dataclass, field
 from . import devices as device_list
 from . import apps, sites
 from .devices import KIND_WORDS, Device
-from .records import RECORDS, Record
+from .records import Record, active
 
 OPEN_WORDS = ("open", "show", "display", "pull up", "put up", "افتح", "اعرض", "شغل", "شغّل")
 SEND_WORDS = ("send", "email", "share", "forward", "ارسل", "أرسل", "شارك")
@@ -243,7 +243,7 @@ def words_after(text: str, verbs) -> str:
 
 def search_part(text: str, action: str) -> tuple[str | None, str | None]:
     if action == "send":
-        return None, None
+        return text.strip() or None, None  # searched in the shared folders when no Record matches
     if any_of(text, FIND_WORDS):
         return words_after(text, FIND_WORDS) or None, "find"
     if any_of(text, ABOUT_WORDS):
@@ -337,8 +337,9 @@ def parse(said: str, devs=None, spoke_from: str = "phone") -> Intent:
 def match(text: str) -> list[Record]:
     """Files whose words appear in the text. Only the best-scoring files are returned:
     one file means go ahead, several mean ask which one, none means not found."""
-    scores = {r.id: sum(1 for w in r.words if has(text, w)) for r in RECORDS}
+    records = active()
+    scores = {r.id: sum(1 for w in r.words if has(text, w)) for r in records}
     best = max(scores.values(), default=0)
     if best == 0:
         return []
-    return [r for r in RECORDS if scores[r.id] == best]
+    return [r for r in records if scores[r.id] == best]

@@ -1,6 +1,7 @@
-"""The shared folder: one folder the Mac's owner chose, searchable by the words inside its files.
+"""Shared folders: the folders the Mac's owner chose, each with the roles that may open its files, searchable by
+the words inside them. These are the Records: there are no built-in files (the 4 sample PDFs are demo only).
 
-Consent is the owner's choice of folder on the Mac itself; nothing outside it is ever read.
+Consent is the owner's choice of folders on the Mac itself; nothing outside them is ever read.
 - Reads .pdf (pypdf), .docx (python-docx), .txt and .md. Skips hidden files, symlinks and anything that leaves the
   folder; at most 2,000 files of 20 MB each.
 - The index is SQLite's built-in full-text search (FTS5) in run/search.db. Arabic is matched after light
@@ -28,6 +29,7 @@ MAX_FILES, MAX_BYTES = 2000, 20 * 1024 * 1024
 STOP = set("""a an the of to for on in at by with and or my me your our please pls can you could would i want need
 open show display find search look get pull up put file files document documents doc report reports pdf
 about mentioning mention mentions regarding that says say which where is are was it this these those some any
+send email mail share forward ارسل أرسل شارك
 افتح اعرض ابحث دور عن على في من الى إلى ملف الملف ملفات التقرير تقرير المستند مستند بخصوص يذكر الذي التي""".split())
 TASHKEEL = re.compile(r"[ؐ-ًؚ-ٰٟۖ-ۭـ]")
 ARABIC = re.compile(r"[؀-ۿ]")
@@ -56,26 +58,54 @@ def check_folder(text: str, home: Path | None = None) -> Path:
     return folder
 
 
-def settings() -> dict | None:
+def folders() -> list[dict]:
+    """[{"folder": "/Users/…/Diwan Shared", "roles": ["owner", "broker"]}, …] in the order they were shared."""
     try:
         d = json.loads(SETTINGS.read_text())
-        return d if d.get("folder") else None
     except (OSError, ValueError):
-        return None
+        return []
+    if d.get("folder"):  # the old one-folder file
+        d = {"folders": [{"folder": d["folder"], "roles": d.get("roles", [])}]}
+    return [f for f in d.get("folders", []) if isinstance(f, dict) and f.get("folder")]
+
+
+def settings() -> dict | None:
+    """The first shared folder (kept for older callers), or None when nothing is shared."""
+    fs = folders()
+    return {**fs[0], "folders": fs} if fs else None
+
+
+def _save(fs: list[dict]) -> None:
+    SETTINGS.parent.mkdir(parents=True, exist_ok=True)
+    SETTINGS.write_text(json.dumps({"folders": fs}))
 
 
 def share(folder: Path, roles) -> dict:
+    """Share a folder (or change who may open it)."""
     folder.mkdir(parents=True, exist_ok=True)
-    d = {"folder": str(folder), "roles": list(roles)}
-    SETTINGS.parent.mkdir(parents=True, exist_ok=True)
-    SETTINGS.write_text(json.dumps(d))
-    INDEX.unlink(missing_ok=True)  # a new folder: start a new index
-    return d
+    fs = folders()
+    old = next((f for f in fs if f["folder"] == str(folder)), None)
+    if old:
+        old["roles"] = list(roles)
+    else:
+        fs.append({"folder": str(folder), "roles": list(roles)})
+        INDEX.unlink(missing_ok=True)  # a new folder: start a new index
+    _save(fs)
+    return {"folder": str(folder), "roles": list(roles)}
 
 
-def unshare() -> None:
-    SETTINGS.unlink(missing_ok=True)
+def unshare(folder: str | None = None) -> None:
+    """Stop sharing one folder, or all of them."""
+    fs = [f for f in folders() if folder is not None and f["folder"] != folder]
+    if fs:
+        _save(fs)
+    else:
+        SETTINGS.unlink(missing_ok=True)
     INDEX.unlink(missing_ok=True)
+
+
+def roles_by_folder() -> list[list[str]]:
+    return [list(f.get("roles", [])) for f in folders()]
 
 
 # ---------------- reading files ----------------
@@ -116,8 +146,12 @@ def read_text(path: Path) -> tuple[str, str]:
 # ---------------- the index ----------------
 
 class Library:
-    def __init__(self, folder: Path, db_path: Path | None = None):
-        self.folder = Path(folder).resolve()
+    """One index over all shared folders. A file is kept as "<folder number>/<path inside it>"."""
+
+    def __init__(self, folder, db_path: Path | None = None):
+        roots = folder if isinstance(folder, (list, tuple)) else [folder]
+        self.folders = [Path(f).resolve() for f in roots]
+        self.folder = self.folders[0]
         self.lock = threading.Lock()
         self.db = sqlite3.connect(str(db_path or INDEX), check_same_thread=False)
         self.db.executescript("""
@@ -126,32 +160,38 @@ class Library:
             CREATE VIRTUAL TABLE IF NOT EXISTS docs USING fts5(norm, tokenize='unicode61 remove_diacritics 2');
             CREATE TABLE IF NOT EXISTS bodies(id INTEGER PRIMARY KEY, body TEXT);""")
 
-    def candidates(self) -> tuple[list[Path], int]:
-        """Files that may be read: inside the folder, not hidden, not links, right type and size."""
+    def candidates(self) -> tuple[list[tuple[int, Path]], int]:
+        """Files that may be read: inside a shared folder, not hidden, not links, right type and size."""
         found, skipped = [], 0
-        for dirpath, dirnames, filenames in os.walk(self.folder, followlinks=False):
-            dirnames[:] = sorted(d for d in dirnames if not d.startswith(".") and not os.path.islink(os.path.join(dirpath, d)))
-            for name in sorted(filenames):
-                p = Path(dirpath) / name
-                if name.startswith(".") or p.suffix.lower() not in TYPES:
-                    continue
-                if p.is_symlink() or not self.inside(p) or p.stat().st_size > MAX_BYTES or len(found) >= MAX_FILES:
-                    skipped += 1
-                    continue
-                found.append(p)
+        for i, root in enumerate(self.folders):
+            for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+                dirnames[:] = sorted(d for d in dirnames if not d.startswith(".") and not os.path.islink(os.path.join(dirpath, d)))
+                for name in sorted(filenames):
+                    p = Path(dirpath) / name
+                    if name.startswith(".") or p.suffix.lower() not in TYPES:
+                        continue
+                    if p.is_symlink() or not self.inside(p, i) or p.stat().st_size > MAX_BYTES or len(found) >= MAX_FILES:
+                        skipped += 1
+                        continue
+                    found.append((i, p))
         return found, skipped
 
-    def inside(self, p: Path) -> bool:
+    def inside(self, p: Path, i: int = 0) -> bool:
         real = Path(os.path.realpath(p))
-        return self.folder in real.parents
+        return self.folders[i] in real.parents
+
+    @staticmethod
+    def split(rel: str) -> tuple[int, str]:
+        n, _, rest = rel.partition("/")
+        return (int(n), rest) if n.isdigit() else (0, rel)
 
     def index(self) -> dict:
         """Bring the index up to date: new or changed files are read, removed ones dropped."""
         with self.lock:
             files, skipped = self.candidates()
             seen, changed = set(), 0
-            for p in files:
-                rel = str(p.relative_to(self.folder))
+            for i, p in files:
+                rel = f"{i}/{p.relative_to(self.folders[i])}"
                 seen.add(rel)
                 st = p.stat()
                 row = self.db.execute("SELECT id, mtime, size FROM files WHERE rel=?", (rel,)).fetchone()
@@ -186,8 +226,9 @@ class Library:
     def terms(words: str) -> list[str]:
         return [t for t in normalise(words).split() if t not in {normalise(s) for s in STOP} and len(t) > 1]
 
-    def search(self, words: str, n: int = 5) -> list[dict]:
-        """Best files for these words: all words first; if none, any word. Each with a snippet."""
+    def search(self, words: str, n: int = 5, only: set[int] | None = None) -> list[dict]:
+        """Best files for these words: all words first; if none, any word. Each with a snippet.
+        `only`: the folder numbers this person may open (others are never returned)."""
         terms = self.terms(words)
         if not terms:
             return []
@@ -197,29 +238,39 @@ class Library:
             for q in (" AND ".join(quoted), " OR ".join(quoted)):
                 rows = self.db.execute(
                     "SELECT f.id, f.rel, f.title, f.has_text, bm25(docs) FROM docs JOIN files f ON f.id = docs.rowid "
-                    "WHERE docs MATCH ? ORDER BY bm25(docs) LIMIT ?", (q, n)).fetchall()
+                    "WHERE docs MATCH ? ORDER BY bm25(docs) LIMIT ?", (q, n * 10)).fetchall()
+                if only is not None:
+                    rows = [r for r in rows if self.split(r[1])[0] in only]
+                rows = rows[:n]
                 if rows:
                     break
             out = []
             for fid, rel, title, has_text, score in rows:
                 body = (self.db.execute("SELECT body FROM bodies WHERE id=?", (fid,)).fetchone() or [""])[0]
-                out.append({"id": fid, "rel": rel, "title": title, "score": score, "has_text": bool(has_text),
+                out.append({"id": fid, "rel": self.split(rel)[1], "folder": self.split(rel)[0], "title": title,
+                            "score": score, "has_text": bool(has_text),
                             "snippet": snippet(body, terms) if has_text else "No text inside (a scan): found by its name"})
             return out
 
     def get(self, fid: int) -> dict | None:
         row = self.db.execute("SELECT id, rel, title FROM files WHERE id=?", (fid,)).fetchone()
-        return {"id": row[0], "rel": row[1], "title": row[2]} if row else None
+        if not row:
+            return None
+        i, rel = self.split(row[1])
+        return {"id": row[0], "rel": rel, "folder": i, "title": row[2]}
 
     def path_of(self, fid: int) -> Path | None:
-        """The file's real path, only if it is still a plain file inside the shared folder."""
+        """The file's real path, only if it is still a plain file inside its shared folder."""
         f = self.get(fid)
-        if not f:
+        if not f or f["folder"] >= len(self.folders):
             return None
-        p = self.folder / f["rel"]
-        if p.is_symlink() or not p.is_file() or not self.inside(p):
+        p = self.folders[f["folder"]] / f["rel"]
+        if p.is_symlink() or not p.is_file() or not self.inside(p, f["folder"]):
             return None
         return p
+
+    def count(self, i: int) -> int:
+        return self.db.execute("SELECT count(*) FROM files WHERE rel LIKE ?", (f"{i}/%",)).fetchone()[0]
 
     def close(self) -> None:
         self.db.close()

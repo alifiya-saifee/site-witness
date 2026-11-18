@@ -28,7 +28,12 @@ TEXT = {
     "no_helper":   ("The Mac helper isn't connected.", "مساعد الماك غير متصل."),
     "file_ready":  ("It's ready on your phone. Tap Open, Save or Share.", "الملف جاهز على هاتفك. اضغط فتح أو حفظ أو مشاركة."),
     "needs_check": ("First check it's you: tap the button, then I'll do it.", "تحقّق من هويتك أولًا: اضغط الزر، ثم أنفّذ الطلب."),
-    "approved":    ("Approved. In this demo nothing is sent.", "تمت الموافقة. في هذا العرض لا يُرسل شيء."),
+    "approved":    ("Approved.", "تمت الموافقة."),
+    "share_ready": ("Here it is. Tap Share and pick {to}. You press send.", "تفضّل. اضغط مشاركة واختر {to}. أنت من يضغط إرسال."),
+    "mail_draft":  ("The email to {to} is ready in Mail with the file attached. Check it and press send.",
+                    "الرسالة إلى {to} جاهزة في البريد ومعها الملف. راجعها ثم اضغط إرسال."),
+    "mail_unsure": ("I made the Mail draft, but I couldn't see Mail in front. Check Mail.",
+                    "أنشأت مسودة البريد، لكن لم أرَ تطبيق البريد في المقدّمة. تحقّق منه."),
     # devices
     "on":          ("Done. {Device} is on.", "تم. {device} يعمل الآن."),
     "off":         ("Done. {Device} is off.", "تم. أطفأتُ {device}."),

@@ -23,5 +23,6 @@ def separate_run_files(monkeypatch, tmp_path):
     monkeypatch.setattr(understand, "_last_calls", [])
     monkeypatch.setattr(understand, "_working_model", [])
     monkeypatch.delenv("GROQ_API_KEY", raising=False)
+    monkeypatch.setenv("SW_DEMO", "1")  # most tests use the sample Records and pretend devices; test_real_mode turns it off
     for k in ("SW_PLUG", "SW_PLUG_HOST", "TAPO_USERNAME", "TAPO_PASSWORD"):
         monkeypatch.delenv(k, raising=False)

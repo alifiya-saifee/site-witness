@@ -1,6 +1,6 @@
 """Records: the sample files, and which roles may open them.
 
-All files, people and buildings here are made up (sample data).
+All files and buildings here are made up (sample data), and are used only with SW_DEMO=1 (and in tests).
 The helper can only ever open a file listed here; it never opens a path it is sent.
 """
 from __future__ import annotations
@@ -40,6 +40,17 @@ RECORDS: tuple[Record, ...] = (
            ("owner",)),
 )
 BY_ID = {r.id: r for r in RECORDS}
+
+
+def demo(env=None) -> bool:
+    """SW_DEMO=1: the made-up sample Records and pretend devices are shown. Otherwise only what is really there."""
+    import os
+    return (env if env is not None else os.environ).get("SW_DEMO") == "1"
+
+
+def active() -> tuple[Record, ...]:
+    """The sample Records, only in demo mode. A normal run uses the owner's shared folders instead."""
+    return RECORDS if demo() else ()
 
 from .people import PEOPLE  # noqa: E402  (the real people: run/people.json, set up on the Mac)
 

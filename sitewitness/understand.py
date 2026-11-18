@@ -30,7 +30,7 @@ import httpx
 from . import apps, sites
 from .commands import Intent, normalise
 from .connectors.ble_lamp import COLOURS, colour_name
-from .records import BY_ID, RECORDS
+from .records import BY_ID, active
 
 URL = "https://api.groq.com/openai/v1/chat/completions"
 MODELS = ("openai/gpt-oss-120b", "openai/gpt-oss-20b", "qwen/qwen3.8-27b")
@@ -93,7 +93,7 @@ def enabled() -> bool:
 def menu(devs, spoke_from: str, mac_apps=(), recent=()) -> dict:
     m = {
         "speaking_on": spoke_from,
-        "files": [{"id": r.id, "title": r.title} for r in RECORDS],
+        "files": [{"id": r.id, "title": r.title} for r in active()],
         "apps": [{"key": a.key, "name": a.name, "on_mac": a.on_mac, "on_phone": bool(a.phone)} for a in apps.APPS.values()],
         "websites": [{"id": s["id"], "name": s["name"]} for s in sites.load()],
         "devices": [{"id": d.id, "name": d.name, "kind": d.kind, "actions": [a for a in d.actions if a != "pair"],
@@ -183,9 +183,9 @@ def to_intent(a: dict, sentence: str, devs, spoke_from: str, mac_apps=()) -> Int
     def where(t):
         return "mac" if t == "mac" else "phone" if t == "phone" else ("mac" if spoke_from == "mac" else "phone")
 
-    if act == "open_file" and a.get("file") in BY_ID:
+    if act == "open_file" and a.get("file") in {r.id for r in active()}:
         return Intent(action="open", text=text, matches=[BY_ID[a["file"]]])
-    if act == "send_file" and a.get("file") in BY_ID:
+    if act == "send_file" and a.get("file") in {r.id for r in active()}:
         to = sites.clean_name(a.get("to", ""), 40).title() or None
         return Intent(action="send", text=text, recipient=to, matches=[BY_ID[a["file"]]])
     if act == "search_files" and isinstance(a.get("words"), str) and a["words"].strip():
@@ -229,7 +229,7 @@ def to_intent(a: dict, sentence: str, devs, spoke_from: str, mac_apps=()) -> Int
         if a["do"] in ("clean", "goto") and not place:
             return None
         return Intent(action=a["do"], text=text, kind=dev.kind, device=dev, device_options=[dev], place=place)
-    if act == "print" and a.get("file") in BY_ID:
+    if act == "print" and a.get("file") in {r.id for r in active()}:
         printers = [d for d in devs if d.kind == "printer"]
         return Intent(action="print", text=text, kind="printer", matches=[BY_ID[a["file"]]],
                       device=printers[0] if len(printers) == 1 else None, device_options=printers)

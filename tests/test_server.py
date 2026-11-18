@@ -50,7 +50,7 @@ def test_send_never_sends_it_asks_for_a_tap(client, local):
     assert r["status"] == "needs_approval" and "Karim" in r["question"]
     assert not any(e["type"].startswith("device.") for e in server.hub.log.list())
     a = client.post(f"/api/approve/{r['approval']}").json()
-    assert "Nothing was emailed" in a["note"]
+    assert a["status"] == "approved" and a["then"] == "no_helper"  # it would be a Mail draft; nothing is ever sent
     client.post(f"/api/approve/{r['approval']}")  # a second tap changes nothing
     assert [e["type"] for e in server.hub.log.list()].count("approval.given") == 1
 

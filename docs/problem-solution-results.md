@@ -178,9 +178,9 @@ person controls.
 
 ### Still demo-static
 1. ~~People are written into the code, and phones pick who they are.~~ Done in Phase 1.
-2. Records is 4 made-up sample PDFs.
-3. "Send" is only logged.
-4. A pretend lamp and pretend robots appear when no real one is added.
+2. ~~Records is 4 made-up sample PDFs.~~ Done in Phase 3: Records are your shared folders.
+3. ~~"Send" is only logged.~~ Done in Phase 3: a Mail draft or the phone's share sheet; you press send.
+4. ~~A pretend lamp and pretend robots appear when no real one is added.~~ Done in Phase 3: only with `SW_DEMO=1`.
 5. ~~Files found from the phone open on the Mac, not on the phone.~~ Done in Phase 2.
 
 ### The plan (approved 18 Nov)
@@ -201,7 +201,7 @@ person controls.
   3. view, save or Share (WhatsApp, Mail).
   - Limits: 100 MB at most; secret files never offered.
 
-**Phase 3: no more static parts**
+**Phase 3: no more static parts** ✅ built 18 Nov (280 tests)
 - Records = the folders the owner shares, each with the roles that may use them.
 - **Send for real, with you pressing send:** the phone's share sheet, or a Mail draft with the attachment to that
   person's email.
@@ -228,7 +228,7 @@ person controls.
 
 | Check | Result |
 |---|---|
-| Tests | **271 passing** (Groq, Bluetooth, IR and robots faked; the ROS sim and Roborock simulator tested separately) |
+| Tests | **280 passing** (Groq, Bluetooth, IR and robots faked; the ROS sim and Roborock simulator tested separately) |
 | "Open Notes and set the Mac volume to 30" | 2 steps, both checked (Notes in front; volume 46 → 30), one fresh reply, 2.7 s |
 | «افتح يوتيوب على الماك وارفع الصوت» | 2 steps (YouTube open; volume 30 → 40), Arabic reply |
 | "Open the Al Noor report" → "now send it to Omar" | "it" understood from memory; the send waited for a tap |
@@ -238,6 +238,7 @@ person controls.
 | Live app map | Install noticed in 0.64 s, delete in 0.65 s |
 | Wi-Fi scan | Found the Samsung TV (UA55DU8000) and the HP printer (IPP ready) |
 | Robots | ROS 2 Nav2 simulation: go-to and stop pass; Roborock official simulator passes |
+| Phase 3, live on a scratch copy (no demo mode) | No pretend devices, no sample files ("open the Al Noor slides" → not found); a shared folder read (1 file); "send the lift note to Omar" → "Send 'Lift note' to Omar?" → Approve → a Mail draft is asked of the helper (Mail itself not tried live yet) |
 | Phase 2, live on a scratch copy (phone over https) | "Open the Al Noor slides" → file ready → 81 KB PDF downloaded, a second try refused (410). "Find my CV" → 8 Spotlight results → tap → "check it's you first" → Allow on the Mac → the CV (136 KB) came to the phone; the temporary copy was deleted; no folder path anywhere in the log. Manifest and service worker served |
 | Phase 1, live on a scratch copy | First-run owner set-up; a phone waits for Allow (403 before); allowed as Omar, it claimed to be the owner and was still refused the owner's report; other-site Origin 403, text/plain POST 415, wrong Host 403; CSP header on the page; `sessions.json` mode 600 with no token in it |
 | Bluetooth scan without the library | Says "the Bluetooth library isn't installed yet" instead of failing |

@@ -12,7 +12,9 @@ Safety rules this file keeps:
 - 30 commands a minute per phone.
 - Only a helper on this Mac, holding the helper token, can connect, and only it can download files.
 - Each file download needs a one-time token tied to one command and one file.
-- "Send" never sends: it creates an approval, and even an approved send is only logged in this demo.
+- "Send" never sends by itself: it waits for an Approve tap, then makes a Mail draft (on the Mac) or brings the file
+  to the phone's share sheet. A person always presses send.
+- The made-up sample Records and pretend devices appear only with SW_DEMO=1.
 - A repeated tap (same key) returns the first result; the file is not opened twice.
 - Devices: only ones a person added on the Mac (or the lamp), only the actions their kind allows, only for the
   roles ticked when adding. Printing and risky devices (heat, motion) always wait for an Approve tap.
@@ -46,7 +48,7 @@ from .commands import parse
 from .devices import may_use
 from .replies import lang_of, reply
 from .events import EventLog
-from .records import BY_ID, PEOPLE, RECORDS, ROOT, allowed
+from .records import BY_ID, PEOPLE, RECORDS, ROOT, allowed, active as records_active, demo as demo_mode
 
 RUN_DIR = ROOT / "run"
 WEB = ROOT / "web"
@@ -278,12 +280,12 @@ def apple_icon():
 def info(request: Request, x_session: str | None = Header(default=None)):
     local = is_local(request.client.host if request.client else None)
     if local:
-        return {"local": True, "paired": True, "helper": hub.helper is not None, "setup": people_mod.needs_setup(),
+        return {"local": True, "paired": True, "demo": demo_mode(), "helper": hub.helper is not None, "setup": people_mod.needs_setup(),
                 "people": people_mod.public(), "me": people_mod.owner_id(), "roles": list(people_mod.ROLES)}
     s = session_of(x_session)
     ok = bool(s) and s.get("status") == "allowed" and s.get("person") in PEOPLE
     me = PEOPLE.get(s.get("person")) if ok else None
-    return {"local": False, "paired": ok, "waiting": bool(s) and s.get("status") == "waiting",
+    return {"local": False, "paired": ok, "demo": demo_mode(), "waiting": bool(s) and s.get("status") == "waiting",
             "helper": hub.helper is not None if ok else None,
             "people": [{"id": s["person"], "name": me["name"], "role": me["role"]}] if ok else [],
             "me": s["person"] if ok else None, "checked": fresh(s) if ok else False,
@@ -752,12 +754,14 @@ async def do_intent(intent, said: str, person: str, steps: list, lang: str, also
     if intent.kind:
         dev = devices.by_id(choose[4:]) if choose and choose.startswith("dev:") else intent.device
         return await run_device(intent, dev, person, steps, lang, also_mac, choose)
+    if choose and choose.startswith("lib:") and choose[4:].isdigit() and intent.action == "send":
+        return await send_shared(int(choose[4:]), intent.recipient, person, steps, lang, also_mac)
     if choose and choose.startswith("lib:") and choose[4:].isdigit():
         return await open_shared(int(choose[4:]), person, steps, lang, also_mac, phone=to_phone(intent))
     if choose and choose.startswith("mac:"):
         return await open_found(choose[4:], person, steps, lang, also_mac, phone=to_phone(intent))
-    matches = [BY_ID[choose]] if choose in BY_ID else intent.matches
-    if intent.search_mode or (not matches and intent.action == "open"):
+    matches = [BY_ID[choose]] if choose in {r.id for r in records_active()} else intent.matches
+    if intent.search_mode or (not matches and intent.action in ("open", "send")):
         found = await search_shared(intent, person, steps, lang, also_mac)
         from .commands import any_of
         asked_for_files = bool(intent.search) or any_of(intent.text, FILE_WORDS)  # never search the Mac for any sentence
@@ -772,7 +776,7 @@ async def do_intent(intent, said: str, person: str, steps: list, lang: str, also
         from .commands import any_of
         about_files = any_of(intent.text, FILE_WORDS)  # asked for a file: "couldn't find that file"; else be honest
         return {"status": "not_found",
-                "steps": steps + [{"t": "No file in Records matches that" if about_files else "I didn't understand that", "ok": False}],
+                "steps": steps + [{"t": "No file in your shared folders matches that" if about_files else "I didn't understand that", "ok": False}],
                 "reply": await new_reply("not_found" if about_files else "not_understood", lang, also_mac)}
     if len(matches) > 1:
         hub.log.append("file.ambiguous", actor="hub", content={"options": [r.id for r in matches]})
@@ -789,13 +793,7 @@ async def do_intent(intent, said: str, person: str, steps: list, lang: str, also
     steps.append({"t": f"Allowed for {name} ({PEOPLE[person]['role']})", "ok": True})
 
     if intent.action == "send":
-        aid = uuid.uuid4().hex[:10]
-        to = intent.recipient or "someone"
-        hub.approvals[aid] = {"file": rec.id, "to": to, "by": name, "asker": CALLER.get().get("asker", "mac"), "done": False, "lang": lang, "also_mac": also_mac}
-        hub.log.append("approval.requested", actor="hub", content={"approval": aid, "action": "send", "file": rec.id, "to": to})
-        return {"status": "needs_approval", "approval": aid, "question": f"Send “{rec.title}” to {to}?",
-                "steps": steps + [{"t": "Sending a file needs your tap", "ok": None}],
-                "reply": await new_reply("needs_approval", lang, also_mac, file=rec.id, to=to)}
+        return await ask_to_send(rec.id, rec.title, intent.recipient, person, steps, lang, also_mac)
 
     if to_phone(intent):
         return await offer_download(rec.path, rec.filename, False, steps, lang, also_mac)
@@ -1131,36 +1129,43 @@ async def plan_cancel(pid: str, request: Request, x_session: str | None = Header
 
 
 def get_library() -> "library.Library | None":
-    """The shared folder's index, if the owner shared a folder (opened once, kept)."""
-    st = library.settings()
-    if not st:
+    """The shared folders' index, if the owner shared any (opened once, kept; made again when the list changes)."""
+    fs = [Path(f["folder"]).resolve() for f in library.folders()]
+    if not fs:
         if hub.library:
             hub.library.close()
         hub.library = None
         return None
-    if hub.library is None or str(hub.library.folder) != str(Path(st["folder"]).resolve()):
+    if hub.library is None or hub.library.folders != fs:
         if hub.library:
             hub.library.close()
-        hub.library = library.Library(Path(st["folder"]))
+        hub.library = library.Library(fs)
     return hub.library
+
+
+def folders_for(person: str) -> set[int]:
+    """The shared folders (by number) whose files this person's role may open."""
+    role = PEOPLE[person]["role"]
+    return {i for i, roles in enumerate(library.roles_by_folder()) if role in roles}
 
 
 async def search_shared(intent, person: str, steps: list, lang: str, also_mac: bool) -> dict | None:
     """Look inside the shared folder's files. None means: nothing to say here, fall back to Records."""
-    lib, st = get_library(), library.settings()
+    lib = get_library()
     q = (intent.search or "").strip()
     if lib is None:
         if intent.search_mode:
             return {"status": "not_found", "steps": steps + [{"t": "No folder is shared for searching (Mac → Shared folder)", "ok": False}],
                     "reply": await new_reply("no_folder", lang, also_mac)}
         return None
-    if PEOPLE[person]["role"] not in st.get("roles", []):
+    mine = folders_for(person)
+    if not mine:
         name = PEOPLE[person]["name"]
-        return {"status": "refused", "steps": steps + [{"t": f"{name} may not open files from the shared folder", "ok": False}],
+        return {"status": "refused", "steps": steps + [{"t": f"{name} may not open files from the shared folders", "ok": False}],
                 "reply": await new_reply("refused", lang, also_mac, person=name)}
     if not library.Library.terms(q):
         return None
-    results = await asyncio.to_thread(lib.search, q)
+    results = await asyncio.to_thread(lib.search, q, 5, mine)
     words = " ".join(library.Library.terms(q)) if lang == "en" else q
     hub.log.append("file.searched", actor="hub", content={"mode": intent.search_mode or "open", "found": str(len(results))})
     if not results:
@@ -1171,7 +1176,9 @@ async def search_shared(intent, person: str, steps: list, lang: str, also_mac: b
     steps = steps + [{"t": f"Searched inside the shared folder: {len(results)} file(s)", "ok": True}]
     clear = len(results) == 1 or results[0]["score"] < results[1]["score"] * 1.5  # bm25: lower is better
     if intent.search_mode != "find" and clear:
-        return await open_shared(results[0]["id"], person, steps, lang, also_mac)
+        if intent.action == "send":
+            return await send_shared(results[0]["id"], intent.recipient, person, steps, lang, also_mac)
+        return await open_shared(results[0]["id"], person, steps, lang, also_mac, phone=to_phone(intent))
     options = [{"id": f"lib:{r['id']}", "title": r["title"], "snippet": r["snippet"]} for r in results]
     rep = await new_reply("search_one", lang, also_mac, q=words, title=results[0]["title"], file="lib") if len(results) == 1 \
         else await new_reply("search_found", lang, also_mac, n=len(results), q=words)
@@ -1179,10 +1186,12 @@ async def search_shared(intent, person: str, steps: list, lang: str, also_mac: b
 
 
 async def open_shared(fid: int, person: str, steps: list, lang: str, also_mac: bool, phone: bool = False) -> dict:
-    lib, st = get_library(), library.settings() or {}
+    lib = get_library()
     name = PEOPLE[person]["name"]
-    if PEOPLE[person]["role"] not in st.get("roles", []):
-        return {"status": "refused", "steps": steps + [{"t": f"{name} may not open files from the shared folder", "ok": False}],
+    f = lib.get(fid) if lib else None
+    if f and f["folder"] not in folders_for(person):
+        hub.log.append("access.refused", actor="hub", content={"file": f"lib-{fid}", "person": person})
+        return {"status": "refused", "steps": steps + [{"t": f"{name} may not open files from that shared folder", "ok": False}],
                 "reply": await new_reply("refused", lang, also_mac, person=name)}
     path = lib.path_of(fid) if lib else None
     if path is None:
@@ -1203,6 +1212,82 @@ async def open_shared(fid: int, person: str, steps: list, lang: str, also_mac: b
     await hub.helper.send_json({"type": "open_file", "command_id": cid, "file_id": fileid,
                                 "filename": fileid + path.suffix.lower(), "token": ftoken})
     return {"status": "sent", "command": cid, "steps": steps + [{"t": "Sent to the Mac", "ok": True}]}
+
+
+# ---------------- sending: you approve, then you press send ----------------
+
+def file_ref(key: str) -> dict | None:
+    """A file by its key ("lib:12" from a shared folder, or a sample Record id): where it is and what it's called."""
+    if key.startswith("lib:") and key[4:].isdigit():
+        lib = get_library()
+        fid = int(key[4:])
+        path = lib.path_of(fid) if lib else None
+        if path is None:
+            return None
+        return {"path": path, "name": path.name, "title": lib.get(fid)["title"], "hid": f"lib-{fid}",
+                "hname": f"lib-{fid}{path.suffix.lower()}"}
+    rec = BY_ID.get(key)
+    return {"path": rec.path, "name": rec.filename, "title": rec.title, "hid": rec.id, "hname": rec.filename} if rec else None
+
+
+def person_named(text: str | None) -> str | None:
+    """The person someone meant by "to Omar": full name, first name or id."""
+    t = " ".join((text or "").lower().split())
+    for pid, p in PEOPLE.items():
+        n = p["name"].lower()
+        if t and t in (n, n.split()[0], pid):
+            return pid
+    return None
+
+
+async def ask_to_send(key: str, title: str, to: str | None, person: str, steps: list, lang: str, also_mac: bool) -> dict:
+    """Sending always waits for a tap. After it: a Mail draft on the Mac, or the share sheet on the phone. You send."""
+    aid = uuid.uuid4().hex[:10]
+    to = to or "someone"
+    hub.approvals[aid] = {"file": key, "title": title, "to": to, "by": PEOPLE[person]["name"],
+                          "asker": CALLER.get().get("asker", "mac"), "done": False, "lang": lang, "also_mac": also_mac}
+    hub.log.append("approval.requested", actor="hub", content={"approval": aid, "action": "send", "file": title, "to": to})
+    return {"status": "needs_approval", "approval": aid, "question": f"Send “{title}” to {to}?",
+            "steps": steps + [{"t": "Sending a file needs your tap", "ok": None}],
+            "reply": await new_reply("needs_approval", lang, also_mac, file=key, title=title, to=to)}
+
+
+async def send_shared(fid: int, to: str | None, person: str, steps: list, lang: str, also_mac: bool) -> dict:
+    lib = get_library()
+    f = lib.get(fid) if lib else None
+    name = PEOPLE[person]["name"]
+    if f is None or lib.path_of(fid) is None:
+        return {"status": "not_found", "steps": steps + [{"t": "That file isn't in the shared folders any more", "ok": False}],
+                "reply": await new_reply("file_gone", lang, also_mac)}
+    if f["folder"] not in folders_for(person):
+        hub.log.append("access.refused", actor="hub", content={"file": f"lib-{fid}", "person": person})
+        return {"status": "refused", "steps": steps + [{"t": f"{name} may not send files from that shared folder", "ok": False}],
+                "reply": await new_reply("refused", lang, also_mac, person=name)}
+    steps = steps + [{"t": f"Found “{f['title']}” in the shared folders", "ok": True}]
+    return await ask_to_send(f"lib:{fid}", f["title"], to, person, steps, lang, also_mac)
+
+
+async def mail_draft(ref: dict, a: dict) -> dict:
+    """On the Mac: Mail opens a new email with the file attached, to that person's email. Nothing is sent."""
+    steps = [{"t": "Approved by you", "ok": True}]
+    if hub.helper is None:
+        return {"status": "no_helper", "steps": steps + [{"t": "No helper is connected on the Mac", "ok": False}],
+                "reply": await new_reply("no_helper", a.get("lang", "en"), False)}
+    pid = person_named(a["to"])
+    email = PEOPLE[pid]["email"] if pid else ""
+    cid, ftoken = uuid.uuid4().hex[:12], secrets.token_urlsafe(18)
+    hub.file_tokens[ftoken] = ref["hid"]
+    hub.commands[cid] = {"state": "sent", "detail": "Sent to the Mac", "file": ref["hid"], "title": ref["title"],
+                         "mail": True, "to": a["to"], "proof": None, "lang": a.get("lang", "en"),
+                         "also_mac": a.get("also_mac", False), "reply": None}
+    hub.log.append("device.command", actor="hub", content={"command": cid, "do": "mail draft", "file": ref["title"],
+                                                           "to": a["to"]})
+    await hub.helper.send_json({"type": "mail_draft", "command_id": cid, "file_id": ref["hid"], "filename": ref["hname"],
+                                "token": ftoken, "attach_name": ref["name"], "subject": ref["title"],
+                                "to_email": email, "to_name": PEOPLE[pid]["name"] if pid else ""})
+    note = f"A Mail draft to {a['to']}" + (f" ({email})" if email else " (add their address: no email saved for them)") + \
+        ": you check it and press send"
+    return {"status": "sent", "command": cid, "steps": steps + [{"t": note, "ok": True}]}
 
 
 # ---------------- files to the phone ----------------
@@ -1475,9 +1560,9 @@ async def run_device(intent, dev, person: str, steps: list, lang: str, also_mac:
                     "reply": await new_reply("unknown_place", lang, also_mac, device=dev, place=intent.place_unknown,
                                              places=dev.place_names)}
     if action == "print":
-        matches = [BY_ID[choose]] if choose in BY_ID else intent.matches
+        matches = [BY_ID[choose]] if choose in {r.id for r in records_active()} else intent.matches
         if not matches:
-            return {"status": "not_found", "steps": steps + [{"t": "Which file? No file in Records matches that", "ok": False}],
+            return {"status": "not_found", "steps": steps + [{"t": "Which file? No file in your shared folders matches that", "ok": False}],
                     "reply": await new_reply("not_found", lang, also_mac)}
         if len(matches) > 1:
             return {"status": "choose", "steps": steps + [{"t": f"{len(matches)} files match. Which one?", "ok": None}],
@@ -1915,19 +2000,21 @@ def understanding(request: Request, x_session: str | None = Header(default=None)
 @app.get("/api/folder")
 def folder_info(request: Request):
     mac_only(request)
-    st = library.settings()
     lib = get_library()
+    rows = [{"folder": f["folder"], "name": Path(f["folder"]).name, "roles": f["roles"],
+             "files": lib.count(i) if lib else 0} for i, f in enumerate(library.folders())]
     counts = None
     if lib:
         total, no_text = lib.db.execute("SELECT count(*), sum(has_text=0) FROM files").fetchone()
         counts = {"files": total, "no_text": no_text or 0}
-    return {"folder": st["folder"] if st else None, "roles": st["roles"] if st else [], "counts": counts,
-            "default": str(library.DEFAULT_FOLDER)}
+    first = rows[0] if rows else None
+    return {"folders": rows, "folder": first["folder"] if first else None, "roles": first["roles"] if first else [],
+            "counts": counts, "default": str(library.DEFAULT_FOLDER)}
 
 
 @app.post("/api/folder")
 async def folder_share(request: Request):
-    """Share one folder for searching (the owner's choice, on the Mac), then read it."""
+    """Share a folder (or change who may open it): the owner's choice, on the Mac. Then read it."""
     mac_only(request)
     b = await request.json()
     try:
@@ -1937,10 +2024,10 @@ async def folder_share(request: Request):
     roles = [r for r in devices.ROLES if r in set(b.get("roles") or [])]
     if not roles:
         raise HTTPException(400, "Tick at least one role who may open files from it")
-    if hub.library:
-        hub.library.close()
-        hub.library = None
+    if len(library.folders()) >= 10 and str(folder) not in {f["folder"] for f in library.folders()}:
+        raise HTTPException(400, "At most 10 shared folders")
     library.share(folder, roles)
+    get_library()
     hub.log.append("folder.shared", actor="owner", content={"folder": folder.name, "roles": ", ".join(roles)})
     return await folder_reindex(request)
 
@@ -1958,7 +2045,7 @@ async def folder_reindex(request: Request):
 
 @app.post("/api/folder/samples")
 async def folder_samples(request: Request):
-    """Copy the 3 made-up sample reports into the shared folder."""
+    """Copy the 3 made-up sample reports into the first shared folder."""
     mac_only(request)
     lib = get_library()
     if not lib:
@@ -1974,13 +2061,17 @@ async def folder_samples(request: Request):
 
 
 @app.delete("/api/folder")
-def folder_unshare(request: Request):
+def folder_unshare(request: Request, folder: str | None = None):
+    """Stop sharing one folder (?folder=…), or all of them. The files themselves are never touched."""
     mac_only(request)
     if hub.library:
         hub.library.close()
         hub.library = None
-    library.unshare()
-    hub.log.append("folder.unshared", actor="owner", content={})
+    library.unshare(folder)
+    hub.log.append("folder.unshared", actor="owner", content={"folder": Path(folder).name if folder else "all"})
+    lib = get_library()
+    if lib:
+        lib.index()
     return {"status": "unshared"}
 
 
@@ -2003,14 +2094,13 @@ async def keep_index_fresh() -> None:
     watcher, watching = None, None
     try:
         while True:
-            st = library.settings()
-            folder = str(Path(st["folder"]).resolve()) if st else None
+            folder = [str(Path(f["folder"]).resolve()) for f in library.folders()]
             if folder != watching:
                 if watcher:
                     watcher.stop()
                 watcher, watching = None, folder
                 if folder:
-                    watcher = mac_map.Watcher([folder], lambda: asyncio.run_coroutine_threadsafe(reindex_now(), loop),
+                    watcher = mac_map.Watcher(folder, lambda: asyncio.run_coroutine_threadsafe(reindex_now(), loop),
                                               recursive=True).start()
             await asyncio.sleep(2)  # only checks which folder is shared; the files themselves are watched
     finally:
@@ -2065,6 +2155,9 @@ async def approve(aid: str, request: Request, x_session: str | None = Header(def
             raise HTTPException(403, "Only the phone that asked (or the Mac) can approve this")
         if not fresh(hub.sessions[h]):
             raise HTTPException(403, "needs_check")
+        CALLER.set({"asker": f"s:{sid_of(h)}", "session": h})
+    else:
+        CALLER.set({"asker": "mac", "session": None})
     if a.get("cancelled") and "device" not in a:
         return {"status": "cancelled", "then": "cancelled", "note": "Cancelled before you approved",
                 "steps": [{"t": "Cancelled before you approved", "ok": False}]}
@@ -2106,14 +2199,28 @@ async def approve_one(aid: str, a: dict) -> dict:
         a["answer"] = await send_device(dev, a["action"], [{"t": "Approved by you", "ok": True}],
                                         a["lang"], a["also_mac"], file=a.get("file"), place=a.get("place"))
         return a["answer"] | {"status": "approved", "then": a["answer"]["status"]}
-    if not a["done"]:
-        a["done"] = True
-        hub.log.append("approval.given", actor=a["by"], content={"approval": aid, "file": a["file"], "to": a["to"],
-                                                                  "note": "demo: would send; nothing was emailed"},
-                       key=f"approval:{aid}")
-        a["reply"] = await new_reply("approved", a.get("lang", "en"), a.get("also_mac", False))
-    return {"status": "approved", "reply": a.get("reply"),
-            "note": f"Approved. Demo only: logged “would send {BY_ID[a['file']].title} to {a['to']}”. Nothing was emailed."}
+    if a["done"]:
+        return a["answer"] | {"status": "approved", "then": a["answer"]["status"], "repeat": True}
+    a["done"] = True
+    lang, also_mac = a.get("lang", "en"), a.get("also_mac", False)
+    on_phone = bool(CALLER.get().get("session"))
+    hub.log.append("approval.given", actor=a["by"], content={
+        "approval": aid, "file": a.get("title") or a["file"], "to": a["to"],
+        "note": "file on the phone to share: you press send" if on_phone else "a Mail draft: you press send"},
+        key=f"approval:{aid}")
+    ref = file_ref(a["file"])
+    if ref is None:
+        a["answer"] = {"status": "failed", "steps": [{"t": "That file is gone", "ok": False}],
+                       "reply": await new_reply("file_gone", lang, also_mac)}
+    elif on_phone:  # approved on the phone: the file comes to this phone, and its share sheet sends it
+        res = await offer_download(ref["path"], ref["name"], False, [{"t": "Approved by you", "ok": True}], lang, also_mac)
+        if res["status"] == "file":
+            res["steps"].append({"t": f"Tap Share… and pick {a['to']}. You press send", "ok": None})
+            res["reply"] = await new_reply("share_ready", lang, also_mac, to=a["to"])
+        a["answer"] = res
+    else:  # approved on the Mac: a Mail draft with the file attached
+        a["answer"] = await mail_draft(ref, a)
+    return a["answer"] | {"status": "approved", "then": a["answer"]["status"]}
 
 
 @app.get("/api/reply/{rid}.m4a")
@@ -2297,6 +2404,9 @@ async def helper_ws(ws: WebSocket):
                     if confirmed and c["draft"] and c["app"] == "whatsapp":
                         outcome = "whatsapp_draft_mac"
                     c["reply"] = await new_reply(outcome, c.get("lang", "en"), c.get("also_mac", False), app=c["title"])
+                elif c.get("mail"):
+                    outcome = "mail_draft" if confirmed else ("mail_unsure" if msg.get("ok") else "app_failed")
+                    c["reply"] = await new_reply(outcome, c.get("lang", "en"), c.get("also_mac", False), to=c["to"], app="Mail")
                 elif "device" in c:
                     outcome, kw = device_outcome(c, msg, confirmed)
                     c["reply"] = await new_reply(outcome, c.get("lang", "en"), c.get("also_mac", False), **kw)

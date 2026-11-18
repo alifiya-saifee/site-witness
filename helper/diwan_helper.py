@@ -54,6 +54,19 @@ RUN_DIR = ROOT / "run"
 OPENED = RUN_DIR / "opened"
 PORT = int((os.environ.get("SW_PORT") or "8040"))
 HUB = f"127.0.0.1:{PORT}"
+# a new email in Mail with one file attached. It is only shown: the person checks it and presses send.
+# Everything comes in as arguments (never pasted into the script), so a name can't change what it does.
+MAIL_SCRIPT = """on run argv
+  set theFile to POSIX file (item 1 of argv)
+  tell application "Mail"
+    set m to make new outgoing message with properties {subject:(item 2 of argv), content:return & return, visible:true}
+    tell m
+      if (item 3 of argv) is not "" then make new to recipient at end of to recipients with properties {address:(item 3 of argv), name:(item 4 of argv)}
+      make new attachment with properties {file name:theFile} at after the last paragraph
+    end tell
+    activate
+  end tell
+end run"""
 SAFE_NAME = re.compile(r"^[a-z0-9][a-z0-9-]*\.pdf$")
 SHARED_NAME = re.compile(r"^(lib-\d{1,9})\.(pdf|docx|txt|md)$")  # a shared-folder file: id + type, never a path
 CAMERA = (os.environ.get("SW_CAMERA") or "0")   # 0 = the Mac's own camera (ffmpeg -list_devices shows others)
@@ -571,9 +584,9 @@ class Helper:
         ok = self.run(["afplay", str(path)], timeout=30).returncode == 0
         return out | {"ok": ok, "detail": "Played on the Mac" if ok else "afplay failed"}
 
-    def check(self, msg: dict) -> str | None:
+    def check(self, msg: dict, kind: str = "open_file") -> str | None:
         """Why this message must be refused, or None if it is fine."""
-        if msg.get("type") != "open_file":
+        if msg.get("type") != kind:
             return "I only open files"
         shared = SHARED_NAME.match(str(msg.get("filename", "")))
         if shared:
@@ -618,6 +631,42 @@ class Helper:
         if not seen:
             return result | {"detail": "Preview did not show the file", "proof_b64": proof}
         return result | {"ok": True, "detail": "Opened in Preview and confirmed", "proof_b64": proof, "confirmed": True}
+
+    def mail_draft(self, msg: dict) -> dict:
+        """A Mail draft with one Records or shared-folder file attached, to the person's saved email. Never sent."""
+        why = self.check(msg, "mail_draft")
+        result = {"type": "result", "command_id": msg.get("command_id"), "ok": False}
+        if why:
+            return result | {"detail": f"Refused: {why}"}
+        self.used_tokens.add(msg["token"])
+        email = str(msg.get("to_email") or "")
+        if email and not re.fullmatch(r"[^@\s\"<>,]+@[^@\s\"<>,]+\.[^@\s\"<>,]+", email):
+            email = ""
+        name = re.sub(r"[^\w .'-]", "", str(msg.get("to_name") or ""))[:60]
+        subject = re.sub(r"[\r\n]", " ", str(msg.get("subject") or "A file for you"))[:120]
+        suffix = Path(msg["filename"]).suffix
+        attach = re.sub(r"[^\w .()-]", "_", Path(str(msg.get("attach_name") or msg["filename"])).name)[:100].strip(" .")
+        if not attach or Path(attach).suffix.lower() != suffix.lower():
+            attach = (attach or "file") + suffix
+        try:
+            data = self.fetch(msg["file_id"], msg["token"])
+        except Exception as e:
+            return result | {"detail": f"Could not get the file: {e}"}
+        folder = self.opened_dir / "mail" / msg["command_id"]
+        folder.mkdir(parents=True, exist_ok=True)
+        path = folder / attach
+        path.write_bytes(data)
+        if self.run(["osascript", "-e", MAIL_SCRIPT, str(path), subject, email, name], timeout=20).returncode != 0:
+            return result | {"detail": "Mail wouldn't make the draft (allow Terminal to control Mail, and set up Mail once)"}
+        deadline, front = time.monotonic() + min(self.wait, 6), ""
+        while True:
+            front = self.front_app()
+            if front == "Mail" or time.monotonic() > deadline:
+                break
+            time.sleep(0.4)
+        to = f" to {email}" if email else " (no address: add who it's to)"
+        return result | {"ok": True, "confirmed": front == "Mail", "proof_b64": self.screenshot(),
+                         "detail": f"Mail draft ready{to} with {attach} attached. Nothing was sent: you press send"}
 
     def is_open(self, name: str) -> bool | None:
         """True if Preview lists the document, False if not, None if macOS won't let us ask."""
@@ -696,7 +745,8 @@ async def main():
                         f"open the app {msg.get('app')}" if kind == "app" else f"Mac volume {msg.get('action')}" \
                         if kind == "mac" else f"open the website {msg.get('site_id')}" if kind == "site" \
                         else f"open the app {msg.get('name')}" if kind == "mac_app" else "open a found file" \
-                        if kind == "open_found" else f"open {msg.get('file_id')}"
+                        if kind == "open_found" else "make a Mail draft" if kind == "mail_draft" \
+                        else f"open {msg.get('file_id')}"
                     print(f"  Diwan Helper: asked to {what}", flush=True)
 
                     # each command runs on its own, so "stop" is never stuck behind a robot that is still driving
@@ -704,7 +754,7 @@ async def main():
                         try:
                             job = {"device": helper.device, "app": helper.open_app, "mac": helper.mac,
                                    "site": helper.open_site, "mac_app": helper.open_mac_app,
-                                   "open_found": helper.open_found}.get(kind, helper.open_file)
+                                   "open_found": helper.open_found, "mail_draft": helper.mail_draft}.get(kind, helper.open_file)
                             result = await asyncio.to_thread(job, m)
                         except Exception as e:  # never leave the hub waiting
                             result = {"type": "result", "command_id": m.get("command_id"), "ok": False,
