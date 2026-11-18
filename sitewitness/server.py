@@ -39,8 +39,8 @@ from .records import BY_ID, PEOPLE, ROOT, allowed
 
 RUN_DIR = ROOT / "run"
 WEB = ROOT / "web"
-PORT = int(os.environ.get("SW_PORT", "8040"))              # http, this Mac only (page + helper)
-SECURE_PORT = int(os.environ.get("SW_SECURE_PORT", "8443"))  # https, for phones on the Wi-Fi (mic needs https)
+PORT = int((os.environ.get("SW_PORT") or "8040"))              # http, this Mac only (page + helper)
+SECURE_PORT = int((os.environ.get("SW_SECURE_PORT") or "8443"))  # https, for phones on the Wi-Fi (mic needs https)
 LOCAL_HOSTS = {"127.0.0.1", "::1", "localhost"}
 
 

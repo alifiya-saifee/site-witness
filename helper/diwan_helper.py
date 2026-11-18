@@ -45,11 +45,11 @@ from sitewitness.records import BY_ID  # noqa: E402
 
 RUN_DIR = ROOT / "run"
 OPENED = RUN_DIR / "opened"
-PORT = int(os.environ.get("SW_PORT", "8040"))
+PORT = int((os.environ.get("SW_PORT") or "8040"))
 HUB = f"127.0.0.1:{PORT}"
 SAFE_NAME = re.compile(r"^[a-z0-9][a-z0-9-]*\.pdf$")
 SHARED_NAME = re.compile(r"^(lib-\d{1,9})\.(pdf|docx|txt|md)$")  # a shared-folder file: id + type, never a path
-CAMERA = os.environ.get("SW_CAMERA", "0")   # 0 = the Mac's own camera (ffmpeg -list_devices shows others)
+CAMERA = (os.environ.get("SW_CAMERA") or "0")   # 0 = the Mac's own camera (ffmpeg -list_devices shows others)
 BRIGHTER = 8.0   # points out of 255 the picture must change by
 BRIGHT_SHARE = 1.0  # or: % of near-white pixels must change by this much (the camera's auto-exposure hides some of it)
 

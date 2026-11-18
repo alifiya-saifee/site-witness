@@ -10,7 +10,7 @@ import os
 import tempfile
 import threading
 
-MODEL_NAME = os.environ.get("SW_WHISPER_MODEL", "small")
+MODEL_NAME = (os.environ.get("SW_WHISPER_MODEL") or "small")
 MAX_BYTES = 10 * 1024 * 1024   # about a minute of speech; commands are a few seconds
 
 _model = None
