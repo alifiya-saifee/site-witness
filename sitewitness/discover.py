@@ -23,6 +23,7 @@ SERVICE_TYPES = {
     "_ipp._tcp.local.": "Printer", "_hap._tcp.local.": "HomeKit", "_matter._tcp.local.": "Matter",
     "_hue._tcp.local.": "Philips Hue", "_shelly._tcp.local.": "Shelly", "_spotify-connect._tcp.local.": "Spotify",
     "_sonos._tcp.local.": "Sonos", "_androidtvremote2._tcp.local.": "Android TV", "_home-assistant._tcp.local.": "Home Assistant",
+    "_esphomelib._tcp.local.": "ESPHome (can be a Bluetooth relay)",
 }
 
 

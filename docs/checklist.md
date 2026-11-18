@@ -50,6 +50,7 @@ Key: ⬜ to build · 🟢 done · ❓ open
 | Dynamic assistant: several steps per sentence (in order; a tap pauses, then the rest runs; a failure stops the rest), memory of the last turns (“send it to Omar”), answers and live-state questions, fresh replies fact-checked | 🟢 built, tested, tried live with real Groq on this Mac |
 | Live map of the Mac: any installed app (install/delete noticed at once), any file via Spotlight (Owner only; secrets, system and code files never shown); shared folder index follows file changes at once | 🟢 built, tested, tried live (Notes, Calendar, CV search) |
 | Lamp with an infrared remote via a Broadlink IR blaster: add, teach buttons, press with camera proof | 🟡 built and tested with a fake blaster; needs the blaster (and `pip install broadlink`) |
+| Bluetooth: scan (Mac + ESPHome relays), BLE lamps/LED strips, SwitchBot Bot, Sphero robots (moves need a tap, capped); relays card | 🟡 built and tested with fake Bluetooth; needs `pip install bleak bleak-esphome spherov2` and real devices |
 | Home Assistant room hub client; commands logged and confirmed | ⬜ |
 | Hub hardware: Pi/mini PC, IR blaster, CEC, Wi-Fi plug | ⬜ |
 | Guiding mode for devices with no interface | ⬜ |

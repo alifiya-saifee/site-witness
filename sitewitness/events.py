@@ -22,6 +22,8 @@ TYPES = {
     "approval.cancelled",  # a waiting approval was dropped (e.g. "stop" was said first)
     "command.understood",  # how a command was understood: Groq or word match (never Groq's raw answer)
     "mac.volume",          # the Mac's own sound was changed
+    "relay.added",         # a Bluetooth relay (ESPHome proxy) was added on the Mac (never its key)
+    "relay.removed",
     "map.added",           # an app was installed on the Mac (the live map added it at once)
     "map.removed",         # an app was deleted from the Mac (the live map removed it at once)
     "plan.started",        # one sentence became several steps (how many; never Groq's raw answer)

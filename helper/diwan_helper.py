@@ -37,7 +37,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-from sitewitness import apps, devices, mac_map, sites  # noqa: E402
+from sitewitness import apps, bluetooth, devices, mac_map, sites  # noqa: E402
+from sitewitness.connectors import ble_lamp, sphero, switchbot  # noqa: E402
 from sitewitness.connectors.ipp_printer import Printer, PrinterError  # noqa: E402
 from sitewitness.connectors.ir_blaster import IRBlaster, IRError  # noqa: E402
 from sitewitness.connectors.plug import PlugError, TapoPlug  # noqa: E402
@@ -106,7 +107,8 @@ def side_by_side(before: bytes, after: bytes) -> bytes:
 class Helper:
     def __init__(self, runner=run, fetch=download, opened_dir: Path = OPENED, wait: float = 6.0,
                  fetch_reply=download_reply, plug=None, settle: float = 1.5, tv_for=None, printer_for=None,
-                 device_list=None, robot_for=None, app_map=None, find=None, ir_for=None):
+                 device_list=None, robot_for=None, app_map=None, find=None, ir_for=None, bt_adapters=None,
+                 sphero_for=None):
         self.run, self.fetch, self.opened_dir, self.wait = runner, fetch, opened_dir, wait
         self.fetch_reply = fetch_reply
         self.plug = plug if plug is not None else devices.plug_from_env()
@@ -120,6 +122,10 @@ class Helper:
         self.found = mac_map.Found()
         self.find = find or mac_map.find_files
         self.ir_for = ir_for or (lambda d: IRBlaster(d.address, d.mac, int(d.uid) if (d.uid or "").isdigit() else None))
+        self.bt_adapters = bt_adapters or bluetooth.adapters  # the Mac + relays, read fresh each time
+        self.sphero_for = sphero_for or (lambda d: sphero.Sphero(d.uid or d.name))
+        self.levels: dict[str, int] = {}  # Bluetooth lamps: last brightness we set
+        self.loop = None                   # the helper's main loop (Bluetooth runs there); set in main()
 
     @staticmethod
     def _robot_for(d):
@@ -156,11 +162,99 @@ class Helper:
             return self.tv(dev, action, result)
         if dev.kind == "printer":
             return self.print_file(dev, msg, result)
+        if dev.kind == "robot" and dev.sub == "sphero":
+            return self.sphero(dev, action, msg.get("arg"), result)
         if dev.kind == "robot":
             return self.robot(dev, action, msg.get("arg"), result)
         if dev.kind == "ir":
             return self.press(dev, action, result)
+        if dev.kind == "ble_lamp":
+            return self.bt_lamp(dev, action, msg.get("arg"), result)
+        if dev.kind == "switchbot":
+            return self.bot(dev, action, result)
         return self.switch(dev, action, result)
+
+    # ---- Bluetooth (the Mac's own, or a relay) ----
+    def _await(self, coro, timeout: float = 40):
+        """Run a Bluetooth job on the helper's main loop (macOS Bluetooth prefers one loop), or its own in tests."""
+        import threading
+        loop = self.loop
+        if loop and loop.is_running() and getattr(loop, "_thread_id", None) != threading.get_ident():
+            return asyncio.run_coroutine_threadsafe(coro, loop).result(timeout)
+        return asyncio.run(coro)
+
+    def _adapter(self, dev):
+        return bluetooth.adapter_for(dev.via, self.bt_adapters())
+
+    def bt_scan(self, msg: dict) -> dict:
+        out = {"type": "bt_found", "request_id": msg.get("request_id"), "items": [], "problems": []}
+        if msg.get("type") != "bt_scan" or not re.fullmatch(r"[0-9a-f]{12}", str(msg.get("request_id", ""))):
+            return out | {"problems": ["Refused"]}
+        try:
+            items, problems = self._await(bluetooth.scan(8, self.bt_adapters()), timeout=30)
+        except bluetooth.BluetoothError as e:
+            return out | {"problems": [str(e)]}
+        except Exception as e:
+            return out | {"problems": [f"Bluetooth: {type(e).__name__} (allow Bluetooth for Terminal in System Settings)"]}
+        return out | {"items": items, "problems": problems}
+
+    def camera_check(self, action: str, do, result: dict, what: str) -> dict:
+        """Photo, do it, photo: proof for devices that can't report back (infrared, cheap Bluetooth lamps)."""
+        before = self.photo()
+        try:
+            do()
+        except Exception as e:
+            return result | {"detail": f"Couldn't do it: {e}"}
+        time.sleep(self.settle)
+        after = self.photo()
+        if before is None or after is None:
+            return result | {"ok": True, "confirmed": False,
+                             "detail": f"{what}. It can't report back, and the camera couldn't take a photo"}
+        (m0, w0), (m1, w1) = brightness(before), brightness(after)
+        up = m1 - m0 >= BRIGHTER or w1 - w0 >= BRIGHT_SHARE
+        down = m0 - m1 >= BRIGHTER or w0 - w1 >= BRIGHT_SHARE
+        seen = up if action in ("on", "brighter") else down if action in ("off", "dimmer") else (up or down)
+        result["proof_b64"] = base64.b64encode(side_by_side(before, after)).decode()
+        change = f"brightness {m0:.0f} → {m1:.0f}"
+        if action in ("on", "off") and seen:
+            result["state"] = action == "on"
+        if not seen:
+            return result | {"ok": True, "confirmed": False, "detail": f"{what}, but the camera saw no change ({change})"}
+        return result | {"ok": True, "confirmed": True, "detail": f"{what} and the camera saw it ({change})"}
+
+    def bt_lamp(self, dev, action: str, colour: str | None, result: dict) -> dict:
+        if action == "colour" and not ble_lamp.colour_name(colour):
+            return result | {"detail": f"Refused: pick a colour ({', '.join(ble_lamp.COLOURS)})"}
+        level = ble_lamp.next_level(self.levels.get(dev.id, 100), action) if action in ("brighter", "dimmer") else 100
+        lamp = ble_lamp.BleLamp(self._adapter(dev), dev.address, dev.path or "elk")
+
+        def do():
+            self._await(lamp.do(action, colour, level))
+            if action in ("brighter", "dimmer"):
+                self.levels[dev.id] = level
+        what = f"Sent {action}" + (f" {ble_lamp.colour_name(colour)}" if action == "colour" else "") + \
+            (f" (brightness {level}%)" if action in ("brighter", "dimmer") else "")
+        return self.camera_check(action, do, result, what)
+
+    def bot(self, dev, action: str, result: dict) -> dict:
+        try:
+            r = self._await(switchbot.SwitchBot(self._adapter(dev), dev.address).do(action))
+        except Exception as e:
+            return result | {"detail": f"Couldn't reach the SwitchBot: {e}"}
+        out = result | {"ok": True, "confirmed": r["confirmed"], "detail": r["detail"]}
+        if r["confirmed"] and action in ("on", "off"):
+            out["state"] = action == "on"
+        return out
+
+    def sphero(self, dev, action: str, colour: str | None, result: dict) -> dict:
+        rgb = ble_lamp.COLOURS.get(ble_lamp.colour_name(colour) or "") if action == "colour" else None
+        if action == "colour" and not rgb:
+            return result | {"detail": "Refused: pick a colour"}
+        try:
+            r = self.sphero_for(dev).do(action, rgb)
+        except Exception as e:
+            return result | {"detail": f"Couldn't use the robot: {e}", "problem": str(e)}
+        return result | r
 
     def press(self, dev, button: str, result: dict) -> dict:
         """Press one learned remote button through the IR blaster, then look with the camera: infrared can't
@@ -523,6 +617,9 @@ async def main():
                 print("  Diwan Helper: connected. Waiting for commands.", flush=True)
                 await ws.send(json.dumps({"type": "map", "apps": helper.app_map.names()}))
                 loop = asyncio.get_running_loop()
+                helper.loop = loop
+                import threading
+                loop._thread_id = threading.get_ident()
 
                 def changed(added, removed, ws=ws, loop=loop):  # from the watcher thread, the moment it happens
                     print(f"  Diwan Helper: apps added {added}, removed {removed}", flush=True)
@@ -535,6 +632,12 @@ async def main():
                         async def look(m=msg):
                             await ws.send(json.dumps(await asyncio.to_thread(helper.find_files, m)))
                         asyncio.create_task(look())
+                        continue
+                    if msg.get("type") == "bt_scan":
+                        async def listen(m=msg):
+                            print("  Diwan Helper: listening for Bluetooth devices…", flush=True)
+                            await ws.send(json.dumps(await asyncio.to_thread(helper.bt_scan, m)))
+                        asyncio.create_task(listen())
                         continue
                     if msg.get("type") == "speak":
                         # play in the background so a long reply never holds up the next command

@@ -30,6 +30,12 @@ TEXT = {
     # devices
     "on":          ("Done. {Device} is on.", "تم. {device} يعمل الآن."),
     "off":         ("Done. {Device} is off.", "تم. أطفأتُ {device}."),
+    "lamp_colour": ("Done. {Device} is {place} now.", "تم. أصبح {device} {place}."),
+    "lamp_brighter": ("Done. {Device} is brighter.", "تم. أصبح {device} أكثر سطوعًا."),
+    "lamp_dimmer": ("Done. {Device} is dimmer.", "تم. أصبح {device} أخفت."),
+    "bot_pressed": ("Done. {Device} pressed the switch.", "تم. ضغط {device} الزر."),
+    "bot_unsure":  ("I sent it, but {device} didn't confirm.", "أرسلتُ الأمر، لكن {device} لم يؤكد."),
+    "sphero_did":  ("Done. {Device}: {action}, then it stopped.", "تم. {device}: {action}، ثم توقف."),
     "ir_pressed":  ("Done. I pressed {action} for {device}.", "تم. ضغطتُ زر {action} لـ{device}."),
     "switch_unseen": ("I switched it, but the camera couldn't see the change.", "نفّذتُ الأمر، لكن الكاميرا لم ترَ التغيير."),
     "switch_failed": ("Sorry, I couldn't reach {device}.", "عذرًا، لم أتمكن من الوصول إلى {device}."),
@@ -143,7 +149,10 @@ def lang_of(said: str, heard_lang: str | None = None) -> str:
     return "ar" if heard_lang == "ar" or ARABIC.search(said or "") else "en"
 
 
-ARABIC_ACTION = {"on": "أشغّل", "off": "أطفئ"}
+ARABIC_ACTION = {"on": "أشغّل", "off": "أطفئ", "forward": "تقدّم للأمام", "back": "رجع للخلف", "left": "استدار يسارًا",
+                 "right": "استدار يمينًا", "spin": "دار حول نفسه", "press": "اضغط"}
+COLOUR_AR = {"red": "أحمر", "green": "أخضر", "blue": "أزرق", "white": "أبيض", "warm": "دافئ", "yellow": "أصفر",
+             "purple": "بنفسجي", "pink": "وردي", "orange": "برتقالي"}
 
 
 def cap(text: str) -> str:
@@ -159,7 +168,7 @@ def reply(outcome: str, lang: str, *, file: str | None = None, person: str = "",
     if lang == "ar":
         name = SPOKEN[file][1] if file in SPOKEN else (f"«{title}»" if title else "")
         problems = "، ".join(PROBLEM_AR.get(p.strip(), p.strip()) for p in problem.split(",")) if problem else ""
-        place_ar = PLACE_AR.get(place, place)
+        place_ar = PLACE_AR.get(place, COLOUR_AR.get(place, place))
         return ar.format(file=name, File=name, person=ARABIC_NAMES.get(person, person), to=ARABIC_NAMES.get(to, to),
                          n=n, device=dev.name_ar if dev else "الجهاز", action=ARABIC_ACTION.get(action, action),
                          kind=KIND_AR.get(kind, kind), before=before, after=after,

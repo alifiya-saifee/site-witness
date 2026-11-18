@@ -134,8 +134,21 @@ def device_intent(text: str, devs) -> Intent | None:
         named = [d for d in fits if any_of(text, own_words(d))]
         fits = named or fits
     action = tv_only if kind == "tv" and tv_only else ("off" if any_of(text, OFF_WORDS) else "on")
+    place = None
+    if kind == "ble_lamp":  # "make the strip blue", "brighter", «اجعل الشريط أزرق»
+        from .connectors.ble_lamp import COLOURS, COLOURS_AR
+        place = next((c for c in COLOURS if has(text, c)), None) or \
+            next((COLOURS_AR[w] for w in COLOURS_AR if has(text, w)), None)
+        if place:
+            action = "colour"
+        elif any_of(text, ("brighter", "brighten", "more light", "أكثر سطوعا", "زد الإضاءة")):
+            action = "brighter"
+        elif any_of(text, ("dimmer", "dim", "less light", "أخفت", "خفف الإضاءة")):
+            action = "dimmer"
+    if kind == "switchbot" and any_of(text, ("press", "push", "اضغط")):
+        action = "press"
     return Intent(action=action, text=text, kind=kind, device=fits[0] if len(fits) == 1 else None,
-                  device_options=fits)
+                  device_options=fits, place=place)
 
 
 def robot_verb(text: str) -> str | None:

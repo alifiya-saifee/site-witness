@@ -30,7 +30,7 @@ from pathlib import Path
 from fastapi import FastAPI, Header, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, Response
 
-from . import apps, devices, discover, library, mac_map, sites, speech, understand, voice
+from . import apps, bluetooth, devices, discover, library, mac_map, sites, speech, understand, voice
 from .connectors import ir_blaster, roborock_vac
 from .commands import parse
 from .devices import may_use
@@ -932,7 +932,9 @@ def say_action(action: str) -> str:
     return {"start": "start cleaning", "clean": "clean", "pause": "pause", "dock": "go home to charge", "goto": "go to",
             "stop": "stop", "volume_up": "volume up", "volume_down": "volume down", "app:youtube": "open YouTube",
             "app:netflix": "open Netflix", "hdmi": "change input", "print": "print", "toggle": "press power on",
-            "brighter": "make brighter", "dimmer": "dim", "colour": "change the colour of", "mode": "change the mode of"
+            "brighter": "make brighter", "dimmer": "dim", "colour": "change the colour of", "mode": "change the mode of",
+            "forward": "roll forward", "back": "roll back", "left": "turn left", "right": "turn right", "spin": "spin",
+            "press": "press the switch with"
             }.get(action, f"switch {action}")
 
 
@@ -1054,6 +1056,20 @@ async def send_device(dev, action: str, steps: list, lang: str, also_mac: bool, 
 def device_outcome(c: dict, msg: dict, confirmed: bool) -> tuple[str, dict]:
     """Which sentence the agent says after a device result."""
     kind, action, kw = c["kind"], c["action"], {"device": c["device"]}
+    dev = devices.by_id(c["device"])
+    if kind == "robot" and dev is not None and dev.sub == "sphero":
+        if not msg.get("ok"):
+            return ("robot_problem", kw | {"problem": msg["problem"]}) if msg.get("problem") else ("robot_failed", kw)
+        return ("robot_stop" if action == "stop" else "lamp_colour" if action == "colour" else "sphero_did"), \
+            kw | {"action": action, "place": c.get("place") or ""}
+    if kind == "switchbot":
+        if not msg.get("ok"):
+            return "switch_failed", kw
+        if not confirmed:
+            return "bot_unsure", kw
+        return ("bot_pressed" if action == "press" else action), kw
+    if kind == "ble_lamp" and msg.get("ok") and confirmed and action in ("colour", "brighter", "dimmer"):
+        return f"lamp_{action}", kw | {"place": c.get("place") or ""}
     if kind == "robot":
         kw["place"] = c.get("place") or msg.get("target") or ""
         if not msg.get("ok"):
@@ -1071,7 +1087,8 @@ def device_outcome(c: dict, msg: dict, confirmed: bool) -> tuple[str, dict]:
     if kind == "tv" and action == "hdmi":
         return "hdmi", kw
     if not confirmed:
-        return {"plug": "switch_unseen", "tv": "tv_unsure", "printer": "print_waiting", "ir": "switch_unseen"}[kind], kw
+        return {"plug": "switch_unseen", "tv": "tv_unsure", "printer": "print_waiting", "ir": "switch_unseen",
+                "ble_lamp": "switch_unseen"}[kind], kw
     if kind == "ir" and action not in ("on", "off"):
         return "ir_pressed", kw | {"action": action}
     if kind == "printer":
@@ -1136,7 +1153,7 @@ async def add_device(request: Request):
         raise HTTPException(404, "Scan first, then add a device from the list")
     try:
         dev = devices.from_found(f, body.get("name", ""), body.get("room", ""), body.get("roles") or [],
-                                 body.get("name_ar", ""))
+                                 body.get("name_ar", ""), risky=bool(body.get("risky")))
     except ValueError as e:
         raise HTTPException(400, str(e))
     devices.save_added([d for d in devices.load_added() if d.id != dev.id] + [dev])
@@ -1301,6 +1318,60 @@ async def learn_button(device_id: str, request: Request):
                                                            "button": button})
     return {"status": "learned", "button": button,
             "buttons": [b[0] for b in devices.by_id(device_id).buttons] if devices.by_id(device_id) else [button]}
+
+
+@app.post("/api/bt-scan")
+async def bt_scan(request: Request):
+    """Listen for Bluetooth devices near the Mac and near every relay (about 8 seconds). Controls nothing."""
+    mac_only(request)
+    if hub.helper is None:
+        raise HTTPException(409, "The Mac helper isn't connected")
+    rid = uuid.uuid4().hex[:12]
+    fut = asyncio.get_running_loop().create_future()
+    hub.finds[rid] = fut
+    await hub.helper.send_json({"type": "bt_scan", "request_id": rid})
+    try:
+        got = await asyncio.wait_for(fut, 30)
+    except asyncio.TimeoutError:
+        raise HTTPException(504, "No answer from the Mac's Bluetooth")
+    finally:
+        hub.finds.pop(rid, None)
+    items = [i for i in got["items"] if isinstance(i, dict) and str(i.get("key", "")).startswith("bt-")][:60]
+    for i in items:
+        if i.get("connector"):
+            hub.found[i["key"]] = i
+    hub.log.append("network.scanned", actor="hub", content={"bluetooth": str(len(items)),
+                                                            "kinds": ", ".join(sorted({i["kind"] for i in items}))})
+    added = {d.id for d in devices.load_added()}
+    return {"items": [{k: v for k, v in i.items() if k not in ("uid",)} | {"added": i["key"] in added} for i in items],
+            "problems": [str(p)[:200] for p in got["problems"]][:5]}
+
+
+@app.get("/api/relays")
+def relays_list(request: Request):
+    mac_only(request)
+    return bluetooth.public_relays()
+
+
+@app.post("/api/relays")
+async def relays_add(request: Request):
+    mac_only(request)
+    b = await request.json()
+    try:
+        row = bluetooth.add_relay(b.get("name", ""), b.get("host", ""), b.get("key", ""))
+    except bluetooth.BluetoothError as e:
+        raise HTTPException(400, str(e))
+    hub.log.append("relay.added", actor="owner", content={"relay": row["id"], "name": row["name"]})
+    return row
+
+
+@app.delete("/api/relays/{relay_id}")
+def relays_remove(relay_id: str, request: Request):
+    mac_only(request)
+    if not bluetooth.remove_relay(relay_id):
+        raise HTTPException(404, "No such relay")
+    hub.log.append("relay.removed", actor="owner", content={"relay": relay_id})
+    return {"status": "removed"}
 
 
 @app.get("/api/sites")
@@ -1665,6 +1736,11 @@ async def helper_ws(ws: WebSocket):
                 for name in clean(msg.get("removed")):
                     hub.mac_apps.discard(name)
                     hub.log.append("map.removed", actor="helper", content={"app": name})
+                continue
+            if msg.get("type") == "bt_found":
+                fut = hub.finds.pop(str(msg.get("request_id")), None)
+                if fut and not fut.done():
+                    fut.set_result({"items": msg.get("items") or [], "problems": msg.get("problems") or []})
                 continue
             if msg.get("type") == "found":
                 fut = hub.finds.pop(str(msg.get("request_id")), None)

@@ -189,6 +189,30 @@ press a button. A flicker of light means infrared.
 4. “Turn on the lamp” presses the taught button. Infrared can't report back, so the Mac camera takes a before and
    after photo as proof, and says plainly when it couldn't see a change.
 
+## Bluetooth devices and relays
+
+Wi-Fi devices only need the **router** in range (about 30–50 m indoors). Bluetooth needs the **Mac itself** within
+about 10 m, so **relays** extend it: an ESP32 board (about AED 30–40) flashed from esphome.io as a
+“Bluetooth Proxy”, one per far room, passes Bluetooth to the Mac over Wi-Fi.
+
+- **One-time setup:** `.venv/bin/pip install bleak bleak-esphome spherov2` (and allow Bluetooth for Terminal
+  when macOS asks).
+- **Scan Bluetooth** (Mac page, next to Scan my Wi-Fi) listens for 8 s through the Mac and every relay, and lists
+  each device with its signal and who heard it. It never connects to anything. Add one with a name, room and roles.
+- **What can be controlled:**
+
+| Device | Actions | Proof |
+|---|---|---|
+| Bluetooth lamps / LED strips (ELK-BLEDOM, Triones / Happy Lighting) | on, off, brighter, dimmer, colour (“make the strip blue”, «اجعل الشريط أزرق») | camera before/after |
+| SwitchBot Bot (presses a physical switch) | press, on, off | the Bot's own answer |
+| Sphero robots (BOLT, Mini, SPRK+, RVR) | forward, back, left, right, spin (each **needs Approve**, at most 2 s at half speed), stop (never waits), light colour | the robot |
+
+  Tick “heats or moves” when adding a SwitchBot that presses, say, a kettle: then it always asks first.
+- **Relays card:** add a relay by IP or `name.local` (Scan my Wi-Fi also finds them), plus its encryption key if it
+  has one. The key stays in `run/relays.json` on this Mac and is never shown or logged.
+- Cheap lamp clones vary; if one doesn't react, its Bluetooth services need checking. Relay control is written
+  against ESPHome's Bluetooth API and tested with fakes. Try it with a real relay before relying on it.
+
 ## Robots
 
 | Robot | Say | Checked by |

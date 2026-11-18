@@ -13,6 +13,8 @@ with a name, a room and who may use it. Added devices live in run/devices.json (
   A pretend vacuum and a pretend ROS robot stand in until a real one of that kind is added.
 - Learned remote (kind "ir"): a lamp or anything else with an infrared remote, through a Wi-Fi IR blaster
   (Broadlink). Its actions are the remote buttons someone taught it on the Mac (on, off, brighter, …).
+- Bluetooth (kinds "ble_lamp", "switchbot", robot sub "sphero"): reached through the Mac's own Bluetooth or a relay
+  (an ESPHome Bluetooth Proxy in another room); `via` says which. A SwitchBot presses a physical switch.
 - risky=True (heats or moves, e.g. an oven): always waits for an Approve tap.
 
 All names here are made up (sample data).
@@ -36,17 +38,24 @@ KIND_ACTIONS = {
     "plug": ("on", "off"),
     "tv": ("on", "off", "volume_up", "volume_down", "mute", "app:youtube", "app:netflix", "hdmi", "pair"),
     "printer": ("print",),
+    "ble_lamp": ("on", "off", "brighter", "dimmer", "colour"),
+    "switchbot": ("press", "on", "off"),
 }
 IR_BUTTONS = ("on", "off", "toggle", "brighter", "dimmer", "colour", "mode")  # buttons that can be taught
-ROBOT_ACTIONS = {"vacuum": ("stop", "pause", "dock", "start", "clean"), "ros": ("stop", "dock", "goto")}
+ROBOT_ACTIONS = {"vacuum": ("stop", "pause", "dock", "start", "clean"), "ros": ("stop", "dock", "goto"),
+                 "sphero": ("stop", "forward", "back", "left", "right", "spin", "colour")}
 KIND_WORDS = {
     "plug": ("lamp", "light", "lights", "plug", "المصباح", "مصباح", "الضوء", "ضوء", "الاضاءة", "الإضاءة", "اللمبة", "لمبة"),
     "tv": ("tv", "t v", "television", "telly", "screen", "التلفزيون", "تلفزيون", "التلفاز", "تلفاز", "الشاشة", "شاشة"),
     "printer": ("printer", "الطابعة", "طابعة"),
+    "ble_lamp": ("lamp", "light", "lights", "strip", "led strip", "leds", "led", "المصباح", "مصباح", "الضوء", "ضوء",
+                 "الاضاءة", "الإضاءة", "اللمبة", "لمبة", "شريط", "الشريط"),
+    "switchbot": ("switchbot", "switch bot", "button pusher", "سويتش بوت"),
     "ir": ("lamp", "light", "lights", "المصباح", "مصباح", "الضوء", "ضوء", "الاضاءة", "الإضاءة", "اللمبة", "لمبة"),
     "robot": ("robot", "vacuum", "hoover", "roborock", "الروبوت", "روبوت", "المكنسة", "مكنسة"),
 }
-KIND_AR = {"plug": "المصباح", "tv": "التلفزيون", "printer": "الطابعة", "robot": "الروبوت", "ir": "المصباح"}
+KIND_AR = {"plug": "المصباح", "tv": "التلفزيون", "printer": "الطابعة", "robot": "الروبوت", "ir": "المصباح",
+           "ble_lamp": "المصباح", "switchbot": "زر سويتش بوت"}
 ROLES = tuple(sorted({p["role"] for p in PEOPLE.values()}))
 
 
@@ -70,6 +79,7 @@ class Device:
     spots: tuple = ()        # ROS: ((name, x, y, heading), …) on the robot's map
     port: int | None = None  # ROS: rosbridge port
     buttons: tuple = ()      # learned remote: ((button, code), …) taught on the Mac
+    via: str = ""            # Bluetooth: "mac" or the relay it was found through
 
     @property
     def actions(self) -> tuple[str, ...]:
@@ -86,7 +96,7 @@ class Device:
 
     def needs_tap_for(self, action: str) -> bool:
         """Stop is never held up by a tap; every other robot action is."""
-        return self.needs_tap and not (self.kind == "robot" and action == "stop")
+        return self.needs_tap and not (self.kind == "robot" and (action == "stop" or (self.sub == "sphero" and action == "colour")))
 
     @property
     def place_names(self) -> tuple[str, ...]:
@@ -172,10 +182,10 @@ def clean(text: str, n: int) -> str:
     return re.sub(r"\s+", " ", re.sub(r"[^\w\s'&-]", "", str(text or ""))).strip()[:n]
 
 
-def from_found(found: dict, name: str, room: str, roles, name_ar: str = "") -> Device:
+def from_found(found: dict, name: str, room: str, roles, name_ar: str = "", risky: bool = False) -> Device:
     """A device made from one scan result and what the person typed."""
     kind = found["kind"]
-    if kind not in KIND_ACTIONS and kind not in ("robot", "ir"):
+    if kind not in KIND_ACTIONS and kind not in ("robot", "ir"):  # noqa: SIM102
         raise ValueError("No connector for this device yet")
     name, room = clean(name, 40) or found.get("label", kind), clean(room, 30) or "Office"
     first = name.split(" ")[0]
@@ -189,7 +199,8 @@ def from_found(found: dict, name: str, room: str, roles, name_ar: str = "") -> D
     return Device(found["key"], spoken, clean(name_ar, 40) or KIND_AR[kind], room, kind, words, roles,
                   address=found.get("address"), uid=found.get("uid"), mac=found.get("mac"),
                   path=found.get("path"), model=found.get("model", ""), sub=found.get("sub", ""),
-                  places=places, spots=tuple(tuple(x) for x in found.get("spots", ())), port=found.get("port"))
+                  places=places, spots=tuple(tuple(x) for x in found.get("spots", ())), port=found.get("port"),
+                  via=found.get("via", ""), risky=bool(risky))
 
 
 def may_use(person_id: str, device: Device) -> bool:

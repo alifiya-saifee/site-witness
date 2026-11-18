@@ -121,6 +121,19 @@ header span{font-size:12px;color:var(--muted)}
       <button class="btn" type="button" id="scan">Scan my Wi-Fi</button>
       <div id="found"></div>
       <p class="hint" id="scanhint"></p>
+      <p class="hint" style="margin:14px 0 8px"><b>Bluetooth</b> reaches about 10 m from the Mac (and about 10 m around each relay below). It only listens: nothing is connected until you add it. macOS asks once to let Terminal use Bluetooth.</p>
+      <button class="btn" type="button" id="btscan">Scan Bluetooth</button>
+      <div id="btfound"></div>
+      <p class="hint" id="bthint"></p>
+    </section>
+
+    <section class="card" id="relaycard" hidden>
+      <p class="k">Bluetooth relays (this Mac only)</p>
+      <p class="hint" style="margin:0 0 6px">A relay is a small ESP32 board (about AED 30–40) flashed from esphome.io as a “Bluetooth Proxy”. Put one in a far room: it hears Bluetooth there and passes it to this Mac over Wi-Fi. “Scan my Wi-Fi” finds relays too.</p>
+      <div id="relays"></div>
+      <div class="row"><input type="text" id="rlname" value="Kitchen" aria-label="Relay name"><input type="text" id="rlhost" placeholder="IP or kitchen-proxy.local" aria-label="Relay address"></div>
+      <div class="row"><input type="password" id="rlkey" placeholder="Encryption key (if it has one)" aria-label="Encryption key" autocomplete="off"><button class="btn primary" type="button" id="rladd">Add relay</button></div>
+      <p class="hint" id="rlhint">The key is kept only on this Mac and never shown again.</p>
     </section>
 
     <section class="card" id="sitescard" hidden>
@@ -338,23 +351,50 @@ function setupReplies(local){
 let isLocal=false;
 /* One list of things you can add (Wi-Fi scan, or the vacuums on a Roborock account): name, room, who may use it. */
 function renderFound(found, box, hint){
-  const what={tv:'TV',printer:'Printer',plug:'Smart plug',robot:'Robot vacuum'};
-  const defName=f=>f.kind==='tv'?'Living room TV':f.kind==='printer'?'Office printer':f.label;
+  const what={tv:'TV',printer:'Printer',plug:'Smart plug',robot:'Robot vacuum',ble_lamp:'Bluetooth lamp',switchbot:'SwitchBot Bot'};
+  const defName=f=>f.kind==='tv'?'Living room TV':f.kind==='printer'?'Office printer':f.kind==='ble_lamp'?'LED strip':f.kind==='switchbot'?'Coffee machine switch':f.sub==='sphero'?'Sphero':f.label;
   const defRoom=f=>f.kind==='tv'?'Living room':f.kind==='robot'?'Home':'Office';
-  box.innerHTML=found.map((f,i)=>`<div class="found"><b>${esc(f.label)}</b><small style="display:block;color:var(--muted);font-size:12px">${f.connector?what[f.kind]:'No connector yet ('+esc((f.what||[]).join(', '))+')'}${f.model&&f.model!==f.label?' · '+esc(f.model):''} · ${esc(f.address)}${f.places&&f.places.length?' · rooms: '+esc(f.places.map(p=>p[0]).join(', ')):''}</small>${
-    f.added?'<p class="hint">Already added.</p>':f.connector?`<div class="row"><input type="text" data-n="${i}" value="${esc(defName(f))}" aria-label="Name"><input type="text" data-r="${i}" value="${defRoom(f)}" aria-label="Room"></div><div class="row">${['owner','broker','visitor'].map(r=>`<label class="tog"><input type="checkbox" data-role="${r}" data-i="${i}" ${r!=='visitor'?'checked':''}> ${r}</label>`).join('')}<button class="btn primary" type="button" data-add="${i}">Add</button></div>`:''}</div>`).join('');
+  box.innerHTML=found.map((f,i)=>`<div class="found"><b>${esc(f.label)}</b><small style="display:block;color:var(--muted);font-size:12px">${f.connector?(f.sub==='sphero'?'Sphero robot (Bluetooth)':what[f.kind]):'No connector yet ('+esc((f.what||[]).join(', '))+')'}${f.rssi!=null?' · signal '+esc(f.rssi)+' dBm · heard by '+esc(f.via_name||'this Mac'):''}${f.model&&f.model!==f.label?' · '+esc(f.model):''} · ${esc(f.address)}${f.places&&f.places.length?' · rooms: '+esc(f.places.map(p=>p[0]).join(', ')):''}</small>${
+    f.added?'<p class="hint">Already added.</p>':f.connector?`<div class="row"><input type="text" data-n="${i}" value="${esc(defName(f))}" aria-label="Name"><input type="text" data-r="${i}" value="${defRoom(f)}" aria-label="Room"></div><div class="row">${['owner','broker','visitor'].map(r=>`<label class="tog"><input type="checkbox" data-role="${r}" data-i="${i}" ${r!=='visitor'?'checked':''}> ${r}</label>`).join('')}${f.kind==='switchbot'?`<label class="tog"><input type="checkbox" data-risky="${i}"> what it presses heats or moves (always ask me first)</label>`:''}<button class="btn primary" type="button" data-add="${i}">Add</button></div>`:(f.what||[]).some(w=>w.startsWith('ESPHome'))?`<div class="row"><button class="btn" type="button" data-relay="${i}">Use as a Bluetooth relay</button></div>`:''}</div>`).join('');
+  box.querySelectorAll('[data-relay]').forEach(b=>b.onclick=async()=>{ const f=found[b.dataset.relay]; b.disabled=true;
+    try{ await api('/api/relays',{method:'POST',body:JSON.stringify({name:f.label,host:f.address})}); hint.textContent=`Added “${f.label}” as a relay.`; showRelays(); }
+    catch(e){ hint.textContent='Couldn’t add the relay: '+e.message; b.disabled=false; } });
   box.querySelectorAll('[data-add]').forEach(b=>b.onclick=async()=>{
     const i=b.dataset.add, f=found[i], name=box.querySelector(`[data-n="${i}"]`).value;
     const roles=[...box.querySelectorAll(`[data-i="${i}"]:checked`)].map(x=>x.dataset.role);
     b.disabled=true;
     try{
-      const a=await api('/api/devices/add',{method:'POST',body:JSON.stringify({key:f.key,name,room:box.querySelector(`[data-r="${i}"]`).value,roles})});
+      const risky=!!(box.querySelector(`[data-risky="${i}"]`)||{}).checked;
+      const a=await api('/api/devices/add',{method:'POST',body:JSON.stringify({key:f.key,name,room:box.querySelector(`[data-r="${i}"]`).value,roles,risky})});
       hint.textContent=`Added “${name}”.`+(f.kind==='tv'?' Look at the TV now and accept “Allow” with the remote.':'');
       if(a.pairing && a.pairing.status==='sent'){ $('#result').hidden=false; drawSteps(a.pairing.steps); follow(a.pairing.command, a.pairing.steps); }
       refresh();
     }catch(e){ hint.textContent='Couldn’t add it: '+e.message; b.disabled=false; }
   });
 }
+/* Bluetooth: scan (the Mac + relays) and relays */
+async function showRelays(){
+  try{ const list=await api('/api/relays');
+    $('#relays').innerHTML=list.length?list.map(r=>`<div class="dev"><span class="bulb" aria-hidden="true">📡</span><div class="grow"><b>${esc(r.name)}</b><small>${esc(r.host)}${r.has_key?' · key saved':''}</small></div><button class="btn" type="button" data-rl="${esc(r.id)}">Remove</button></div>`).join(''):'<p class="hint">No relays yet: Bluetooth reaches only about 10 m from this Mac.</p>';
+    $('#relays').querySelectorAll('[data-rl]').forEach(b=>b.onclick=async()=>{ await api('/api/relays/'+b.dataset.rl,{method:'DELETE'}); showRelays(); });
+  }catch(e){}
+}
+document.addEventListener('click', async e=>{
+  if(e.target.id==='btscan'){
+    const b=e.target; b.disabled=true; $('#bthint').textContent='Listening for about 8 seconds…'; $('#btfound').innerHTML='';
+    try{ const r=await api('/api/bt-scan',{method:'POST'});
+      const usable=r.items.filter(i=>i.connector), rest=r.items.length-usable.length;
+      $('#bthint').textContent=`Heard ${r.items.length} Bluetooth device(s); ${usable.length} I can control.`+(rest?` ${rest} other(s) have no connector yet.`:'')+(r.problems.length?' Problems: '+r.problems.join('; '):'');
+      renderFound(usable.concat(r.items.filter(i=>!i.connector).slice(0,8)), $('#btfound'), $('#bthint'));
+    }catch(err){ $('#bthint').textContent='Couldn’t scan Bluetooth: '+err.message; }
+    b.disabled=false;
+  }
+  if(e.target.id==='rladd'){
+    try{ await api('/api/relays',{method:'POST',body:JSON.stringify({name:$('#rlname').value,host:$('#rlhost').value,key:$('#rlkey').value})});
+      $('#rlkey').value=''; $('#rlhint').textContent='Relay added. Scan Bluetooth to hear devices near it.'; showRelays(); }
+    catch(err){ $('#rlhint').textContent='Couldn’t add it: '+err.message; }
+  }
+});
 /* Shared folder + joined phones (Mac only) */
 function setupSites(){
   $('#sitescard').hidden=false;
@@ -389,7 +429,7 @@ function setupFolder(){
 function setupScan(){
   if(!isLocal) return;
   setupFolder();
-  $('#scancard').hidden=false; $('#robotcard').hidden=false; $('#ircard').hidden=false;
+  $('#scancard').hidden=false; $('#robotcard').hidden=false; $('#ircard').hidden=false; $('#relaycard').hidden=false; showRelays();
   $('#scan').onclick=async()=>{
     $('#scan').disabled=true; $('#scanhint').textContent='Listening for about 6 seconds…'; $('#found').innerHTML='';
     let found; try{ found=await api('/api/scan',{method:'POST'}); }catch(e){ $('#scanhint').textContent='Scan failed: '+e.message; $('#scan').disabled=false; return; }
@@ -530,7 +570,7 @@ async function refresh(){
     if(!info.paired && !$('#main').hidden){ session=''; store.set('sw-session',''); start(); return; }  // removed on the Mac
     $('#hdot').classList.toggle('on',info.helper); $('#hdot span').textContent=info.helper?'Mac helper connected':'Mac helper not connected';
     const devs=await api('/api/devices');
-    const icon={plug:'💡',tv:'📺',printer:'🖨️',robot:'🤖',ir:'💡'};
+    const icon={plug:'💡',tv:'📺',printer:'🖨️',robot:'🤖',ir:'💡',ble_lamp:'💡',switchbot:'👆'};
     $('#devices').innerHTML=devs.map(d=>`<div class="dev ${d.on?'on':''}"><span class="bulb" aria-hidden="true">${icon[d.kind]||'🔌'}</span><div class="grow"><b>${esc(d.name[0].toUpperCase()+d.name.slice(1))}</b>${d.pretend?' <span class="sample">pretend</span>':''}<small>${esc(d.room)}${d.model&&d.model!=='pretend'?' · '+esc(d.model):''} · ${d.kind==='robot'?esc(d.state||'not used yet')+(d.place?' · at '+esc(d.place):'')+(d.battery!=null?' · 🔋 '+d.battery+'%':'')+' · '+esc((d.sub==='vacuum'?'rooms: ':'spots: ')+d.places.join(', ')):d.kind==='printer'?'prints after your tap':d.kind==='ir'?(d.buttons.length?'buttons: '+esc(d.buttons.join(', ')):'no buttons taught yet'):d.on===true?'on':d.on===false?'off':'not used yet'} · ${esc(d.roles.join(', '))}</small></div>${d.kind==='robot'?`<button class="btn stop" type="button" data-stop="${esc(d.name)}" title="Stops at once, no tap needed">Stop</button>`:''}${isLocal&&!d.pretend&&d.id!=='room-lamp'?`<button class="btn" type="button" data-rm="${esc(d.id)}">Remove</button>`:''}</div>${isLocal&&d.kind==='ir'?`<div class="row teach">${['on','off','toggle','brighter','dimmer','colour'].map(b=>`<button class="btn" type="button" data-teach="${esc(d.id)}" data-b="${b}">Teach ${b==='toggle'?'power':b}${d.buttons.includes(b)?' ✓':''}</button>`).join('')}</div>`:''}`).join('');
     $('#devices').querySelectorAll('[data-teach]').forEach(b=>b.onclick=async()=>{ const was=b.textContent; b.disabled=true; b.textContent='Press it on the remote now…';
       try{ await api(`/api/devices/${b.dataset.teach}/learn`,{method:'POST',body:JSON.stringify({button:b.dataset.b})}); refresh(); }

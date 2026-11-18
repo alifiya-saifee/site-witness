@@ -29,6 +29,7 @@ import httpx
 
 from . import apps, sites
 from .commands import Intent, normalise
+from .connectors.ble_lamp import COLOURS, colour_name
 from .records import BY_ID, RECORDS
 
 URL = "https://api.groq.com/openai/v1/chat/completions"
@@ -55,7 +56,7 @@ Each step is one of:
 {"action":"open_site","site":"<site id>","target":"mac|phone|here"}
 {"action":"new_site","name":"<website name said>","target":"mac|phone|here"}
 {"action":"mac_volume","op":"up|down|mute|unmute|set","level":<0-100 or null>}
-{"action":"device","device":"<device id>","do":"<one of that device's actions>","place":"<one of its places or empty>"}
+{"action":"device","device":"<device id>","do":"<one of that device's actions>","place":"<one of its places, or for 'colour' one of its colours, or empty>"}
 {"action":"print","file":"<file id>"}
 {"action":"status","what":"mac_volume|devices|websites|apps|files|history"}
 {"action":"forget"}
@@ -96,7 +97,8 @@ def menu(devs, spoke_from: str, mac_apps=(), recent=()) -> dict:
         "apps": [{"key": a.key, "name": a.name, "on_mac": a.on_mac, "on_phone": bool(a.phone)} for a in apps.APPS.values()],
         "websites": [{"id": s["id"], "name": s["name"]} for s in sites.load()],
         "devices": [{"id": d.id, "name": d.name, "kind": d.kind, "actions": [a for a in d.actions if a != "pair"],
-                     "places": list(d.place_names)} for d in devs],
+                     "places": list(d.place_names)} | ({"colours": list(COLOURS)} if "colour" in d.actions else {})
+                    for d in devs],
     }
     if mac_apps:
         m["mac_apps"] = sorted(mac_apps)
@@ -218,7 +220,11 @@ def to_intent(a: dict, sentence: str, devs, spoke_from: str, mac_apps=()) -> Int
         if dev is None or a.get("do") not in dev.actions or a.get("do") == "pair":
             return None
         place = a.get("place") or None
-        if place and place not in dev.place_names:
+        if a["do"] == "colour":
+            place = colour_name(place)
+            if not place:
+                return None  # a colour must be named
+        elif place and place not in dev.place_names:
             return None
         if a["do"] in ("clean", "goto") and not place:
             return None
