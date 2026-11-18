@@ -280,3 +280,19 @@ def test_groq_unclear_asks_back(client, monkeypatch):
     r = client.post("/api/command", json={"text": "open that thing", "person": "layla"}).json()
     assert r["reply"]["text"] == "Just to check: Which website do you mean?"
     assert any(e["type"] == "command.understood" and e["content"]["how"] == "Groq" for e in server.hub.log.list())
+
+
+def test_thinking_models_get_room_to_answer(monkeypatch):
+    """gpt-oss thinks first: with too few tokens Groq returns json_validate_failed. Keep room + short thinking."""
+    monkeypatch.setenv("GROQ_API_KEY", "test-key")
+    sent = []
+
+    class R:
+        status_code = 200
+        text = ""
+        def json(self):
+            return {"choices": [{"message": {"content": '{"action":"mac_volume","op":"up","level":null}'}}]}
+
+    understand.ask("louder on my mac", understand.menu([], "phone"), lambda body: sent.append(body) or R())
+    assert sent[0]["model"] == "openai/gpt-oss-120b"
+    assert sent[0]["max_tokens"] >= 1000 and sent[0]["reasoning_effort"] == "low"

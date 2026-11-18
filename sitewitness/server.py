@@ -20,6 +20,7 @@ import base64
 import hashlib
 import time
 import os
+import re
 import subprocess
 import secrets
 import socket
@@ -29,13 +30,13 @@ from pathlib import Path
 from fastapi import FastAPI, Header, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, Response
 
-from . import apps, devices, discover, library, sites, speech, understand, voice
-from .connectors import roborock_vac
+from . import apps, devices, discover, library, mac_map, sites, speech, understand, voice
+from .connectors import ir_blaster, roborock_vac
 from .commands import parse
 from .devices import may_use
 from .replies import lang_of, reply
 from .events import EventLog
-from .records import BY_ID, PEOPLE, ROOT, allowed
+from .records import BY_ID, PEOPLE, RECORDS, ROOT, allowed
 
 RUN_DIR = ROOT / "run"
 WEB = ROOT / "web"
@@ -65,6 +66,10 @@ class Hub:
         self.device_state: dict[str, bool] = {}  # last state each device reported (from the helper)
         self.found: dict[str, dict] = {}         # the last Wi-Fi scan: key -> what was found
         self.robot_state: dict[str, dict] = {}   # last state each robot reported: state, battery, place
+        self.mac_apps: set[str] = set()          # the live map of apps installed on the Mac (names, from the helper)
+        self.finds: dict[str, asyncio.Future] = {}  # file searches waiting for the helper's answer
+        self.memory: dict[str, list[dict]] = {}  # per phone / the Mac: the last few turns (memory only, never saved)
+        self.plans: dict[str, dict] = {}         # several steps from one sentence, run in order
 
 
 hub = Hub()
@@ -187,11 +192,11 @@ async def command(request: Request, x_session: str | None = Header(default=None)
 
 # ---------------- spoken replies ----------------
 
-async def new_reply(outcome: str, lang: str, also_mac: bool, **kw) -> dict:
-    """Make the sentence the agent says back. The audio is made when first asked for (and cached).
-    With also_mac, the helper plays it through the Mac's speakers too."""
+async def new_reply(outcome: str, lang: str, also_mac: bool, text: str | None = None, **kw) -> dict:
+    """Make the sentence the agent says back (a fixed one for this outcome, or `text`). The audio is made when
+    first asked for (and cached). With also_mac, the helper plays it through the Mac's speakers too."""
     rid = uuid.uuid4().hex[:10]
-    hub.replies[rid] = {"text": reply(outcome, lang, **kw), "lang": lang, "audio": None, "engine": None, "note": None}
+    hub.replies[rid] = {"text": text or reply(outcome, lang, **kw), "lang": lang, "audio": None, "engine": None, "note": None}
     if also_mac:  # in the background: making the audio takes a moment, and nothing should wait for it
         task = asyncio.create_task(say_on_mac(rid))
         hub.tasks.add(task)
@@ -219,26 +224,93 @@ FILE_WORDS = ("file", "files", "report", "slides", "deck", "document", "pdf", "q
               "invoice", "contract", "ملف", "تقرير", "عرض", "ملاحظة", "مستند", "فاتورة", "عقد")
 
 
-async def understood(said: str, spoke_from: str) -> tuple:
-    """Groq first (if switched on), the word matcher as backup. Returns (intent, how)."""
+async def understood(said: str, spoke_from: str, asker: str = "mac") -> tuple:
+    """Groq first (if switched on), the word matcher as backup.
+    Returns (steps, answer, how, skipped): a list of Intents, a spoken answer ("" if none)."""
     devs = devices.current()
     words = parse(said, devs, spoke_from)
     if not understand.enabled():
-        return words, "word match"
-    g = await asyncio.to_thread(understand.understand, commands_fix(said), devs, spoke_from)
+        return [words], "", "word match", 0
+    g = await asyncio.to_thread(understand.understand_plan, commands_fix(said), devs, spoke_from,
+                                tuple(sorted(hub.mac_apps)), recent_for(asker))
     definite = bool(words.kind or words.action in ("app", "site", "mac_volume", "send") or words.matches or words.search_mode)
-    if g is not None and g.action != "unclear":
-        return g, "Groq"
+    if g is not None:
+        steps, answer, skipped = g
+        if any(i.action != "unclear" for i in steps) or (answer and not steps):
+            return steps, answer, "Groq", skipped
     if definite:
-        return words, "word match"
+        return [words], "", "word match", 0
     if g is not None:  # Groq wasn't sure either: ask back
-        return g, "Groq"
-    return words, "word match"
+        return g[0], g[1], "Groq", g[2]
+    return [words], "", "word match", 0
 
 
 def commands_fix(said: str) -> str:
     from .commands import fix_hearing
     return fix_hearing(said)
+
+
+# ---------------- memory of the conversation (per phone / the Mac; in memory only, never saved) ----------------
+
+MEMORY_TURNS, MEMORY_FOR = 6, 600.0
+
+
+def recent_for(asker: str) -> list[str]:
+    turns = hub.memory.get(asker, [])
+    if turns and time.monotonic() - turns[-1]["at"] > MEMORY_FOR:  # 10 minutes of silence: forget
+        hub.memory.pop(asker, None)
+        return []
+    return [f"said: {t['said']} -> {t['did']}" for t in turns]
+
+
+def remember(asker: str, said: str, did: str, key: str | None = None) -> None:
+    """Add a turn (or update the turn with the same key: a list of steps that went on after a tap)."""
+    turns = hub.memory.setdefault(asker, [])
+    if key:
+        turns[:] = [t for t in turns if t.get("key") != key]
+    turns.append({"at": time.monotonic(), "said": said[:200], "did": did[:300], "key": key})
+    del turns[:-MEMORY_TURNS]
+
+
+def describe(intent, ids: bool = False) -> str:
+    """What a step is, in a few words. With ids (for memory, so Groq knows what "it" is) the file id is added.
+    Names only, never contents."""
+    a = intent.action
+    if a == "app":
+        return f"open {apps.APPS[intent.app].name} on the {intent.target}" + (" with a draft" if intent.message else "")
+    if a == "mac_app":
+        return f"open {intent.mac_app} on the Mac"
+    if a == "mac_volume":
+        return {"up": "turn the Mac's volume up", "down": "turn the Mac's volume down", "mute": "mute the Mac",
+                "unmute": "unmute the Mac"}.get(intent.volume_op, f"set the Mac's volume to {intent.level}")
+    if a == "site":
+        s = sites.get(intent.site)
+        return f"open {s['name'] if s else 'a website'} on the {intent.target}"
+    if a == "site_unknown":
+        return f"open {intent.site_name} (not saved yet)"
+    if a == "status":
+        return {"mac_volume": "check the Mac's volume", "devices": "check the devices", "websites": "list your websites",
+                "apps": "list the Mac's apps", "files": "list your files", "history": "say what we just did"}[intent.what]
+    if a == "forget":
+        return "forget the conversation"
+    if a == "unclear":
+        return "ask what you meant"
+    if intent.kind:
+        dev = intent.device
+        return f"{say_action(a)} {dev.name if dev else 'the ' + (intent.kind or 'device')}" + \
+            (f" ({intent.place})" if intent.place else "")
+    files = ", ".join(f"{r.title} [{r.id}]" if ids else r.title for r in intent.matches[:1])
+    if a == "send":
+        return f"send {files or 'a file'} to {intent.recipient or 'someone'}"
+    if intent.search:
+        return f"{'find' if intent.search_mode == 'find' else 'open'} files about “{intent.search}”"
+    return f"open {files}" if files else "open a file"
+
+
+def outcome_of(res: dict) -> str:
+    """The last thing that happened, from a result's steps."""
+    st = res.get("steps") or []
+    return st[-1]["t"] if st else res.get("status", "")
 
 
 async def run_command(said: str, person: str, device: str, key: str | None, choose: str | None,
@@ -253,19 +325,46 @@ async def run_command(said: str, person: str, device: str, key: str | None, choo
     hub.pending.pop(asker, None)
     spoke_from = "mac" if device == "this Mac" else "phone"
     if choose:
-        intent, how = parse(said, spoke_from=spoke_from), "word match"
+        plan, answer, how, skipped = [parse(said, spoke_from=spoke_from)], "", "word match", 0
     else:
-        intent, how = await understood(said, spoke_from)
+        plan, answer, how, skipped = await understood(said, spoke_from, asker)
     steps.append({"t": f"Understood by {how}", "ok": True})
-    hub.log.append("command.understood", actor="hub", content={"how": how, "action": intent.action})
+    hub.log.append("command.understood", actor="hub",
+                   content={"how": how, "action": plan[0].action if plan else "answer", "steps": str(len(plan))})
+    if not plan:  # a question or something not on the menu: just an answer, nothing done
+        hub.log.append("answer.given", actor="hub", content={"how": how})
+        remember(asker, said, f"answered: {answer}")
+        return {"status": "answer", "steps": steps + [{"t": "Answer only: nothing was done", "ok": None}],
+                "reply": await new_reply("not_understood", lang, also_mac, text=answer)}
+    if len(plan) == 1 and not answer and not skipped:
+        res = await do_intent(plan[0], said, person, steps, lang, also_mac, asker, choose)
+        if plan[0].action != "forget":
+            remember(asker, said, f"{describe(plan[0], ids=True)}: {outcome_of(res)}")
+        return res
+    return await start_plan(plan, answer, skipped, said, person, steps, lang, also_mac, asker)
+
+
+async def do_intent(intent, said: str, person: str, steps: list, lang: str, also_mac: bool, asker: str,
+                    choose: str | None = None) -> dict:
+    """Act on one understood step. Every rule (roles, taps, checks, proof) is applied here."""
+    name = PEOPLE[person]["name"]
     if intent.action == "app":
         return await run_app(intent, person, steps, lang, also_mac)
+    if intent.action == "mac_app":
+        return await run_mac_app(intent.mac_app, person, steps, lang, also_mac)
     if intent.action == "mac_volume":
         return await run_mac_volume(intent, person, steps, lang, also_mac)
     if intent.action == "site":
         return await run_site(intent.site, intent.target, person, steps, lang, also_mac)
     if intent.action == "site_unknown":
         return await ask_for_address(intent, asker, person, steps, lang, also_mac)
+    if intent.action == "status":
+        return await run_status(intent.what, person, steps, lang, also_mac, asker)
+    if intent.action == "forget":
+        hub.memory.pop(asker, None)
+        hub.log.append("memory.cleared", actor=name, content={})
+        return {"status": "answer", "steps": steps + [{"t": "Forgot the recent conversation", "ok": True}],
+                "reply": await new_reply("forgot", lang, also_mac)}
     if intent.action == "unclear":
         rep = await new_reply("ask_back", lang, also_mac, q=intent.question) if intent.question and lang == "en" \
             else await new_reply("not_understood", lang, also_mac)
@@ -275,9 +374,17 @@ async def run_command(said: str, person: str, device: str, key: str | None, choo
         return await run_device(intent, dev, person, steps, lang, also_mac, choose)
     if choose and choose.startswith("lib:") and choose[4:].isdigit():
         return await open_shared(int(choose[4:]), person, steps, lang, also_mac)
+    if choose and choose.startswith("mac:"):
+        return await open_found(choose[4:], person, steps, lang, also_mac)
     matches = [BY_ID[choose]] if choose in BY_ID else intent.matches
     if intent.search_mode or (not matches and intent.action == "open"):
         found = await search_shared(intent, person, steps, lang, also_mac)
+        from .commands import any_of
+        asked_for_files = bool(intent.search) or any_of(intent.text, FILE_WORDS)  # never search the Mac for any sentence
+        if PEOPLE[person]["role"] == "owner" and asked_for_files and (found is None or found["status"] == "not_found"):
+            on_mac = await search_mac(intent, person, steps, lang, also_mac)
+            if on_mac:
+                return on_mac
         if found:
             return found
     if not matches:
@@ -323,6 +430,305 @@ async def run_command(said: str, person: str, device: str, key: str | None, choo
                                 "filename": rec.filename, "token": ftoken})
     # the spoken reply comes with the final result ("Done. … is open."), not now
     return {"status": "sent", "command": cid, "steps": steps + [{"t": "Sent to the Mac", "ok": True}]}
+
+
+# ---------------- any app on the Mac, files anywhere on the Mac (Owner), questions about live state ----------------
+
+async def run_mac_app(name: str, person: str, steps: list, lang: str, also_mac: bool) -> dict:
+    who_ = PEOPLE[person]["name"]
+    if not mac_allowed(person):
+        hub.log.append("access.refused", actor="hub", content={"app": name, "person": person, "where": "mac"})
+        return {"status": "refused", "steps": steps + [{"t": f"{who_} may not open apps on the Mac", "ok": False}],
+                "reply": await new_reply("refused_mac_app", lang, also_mac, person=who_)}
+    if name not in hub.mac_apps:
+        return {"status": "not_found", "steps": steps + [{"t": f"{name} isn't installed on this Mac", "ok": False}],
+                "reply": await new_reply("app_not_installed", lang, also_mac, app=name)}
+    hub.log.append("app.opened", actor=who_, content={"app": name, "where": "mac", "with_text": "no"})
+    return await to_helper({"type": "mac_app", "name": name}, {"app": "mac:" + name, "title": name, "draft": False},
+                           steps + [{"t": f"Open {name} on the Mac", "ok": True}], lang, also_mac)
+
+
+async def find_on_mac(words: str) -> list[dict]:
+    """Ask the helper to look through Spotlight (the Mac's own live file index). Names and folder labels only."""
+    if hub.helper is None:
+        return []
+    rid = uuid.uuid4().hex[:12]
+    fut = asyncio.get_running_loop().create_future()
+    hub.finds[rid] = fut
+    await hub.helper.send_json({"type": "find", "request_id": rid, "words": words[:120]})
+    try:
+        items = await asyncio.wait_for(fut, 8)
+    except asyncio.TimeoutError:
+        return []
+    finally:
+        hub.finds.pop(rid, None)
+    return [{"id": str(i.get("id", ""))[:12], "name": str(i.get("name", ""))[:120], "folder": str(i.get("folder", ""))[:120]}
+            for i in items if isinstance(i, dict) and re.fullmatch(r"[0-9a-f]{12}", str(i.get("id", "")))][:8]
+
+
+async def search_mac(intent, person: str, steps: list, lang: str, also_mac: bool) -> dict | None:
+    """Owner only: search the whole Mac. None if nothing was found (the usual reply follows)."""
+    words = intent.search or intent.text
+    items = await find_on_mac(words)  # the helper keeps only plain words (mac_map.safe_words)
+    hub.log.append("file.searched", actor="hub", content={"mode": "mac", "found": str(len(items))})
+    if not items:
+        return None
+    steps = steps + [{"t": f"Searched the Mac (Spotlight): {len(items)} file(s)", "ok": True}]
+    if len(items) == 1 and intent.search_mode != "find":
+        return await open_found(items[0]["id"], person, steps, lang, also_mac, items[0]["name"])
+    options = [{"id": f"mac:{i['id']}", "title": i["name"], "snippet": i["folder"]} for i in items]
+    return {"status": "choose", "steps": steps + [{"t": "Which one?", "ok": None}], "options": options,
+            "reply": await new_reply("search_found", lang, also_mac, n=len(items), q=words)}
+
+
+async def open_found(fid: str, person: str, steps: list, lang: str, also_mac: bool, name: str = "") -> dict:
+    if PEOPLE[person]["role"] != "owner":
+        who_ = PEOPLE[person]["name"]
+        return {"status": "refused", "steps": steps + [{"t": f"Only the owner can open files from the whole Mac", "ok": False}],
+                "reply": await new_reply("refused", lang, also_mac, person=who_)}
+    if not re.fullmatch(r"[0-9a-f]{12}", fid or ""):
+        raise HTTPException(400, "Bad choice")
+    return await to_helper({"type": "open_found", "found_id": fid}, {"file": "found", "title": name or "the file"},
+                           steps + [{"t": f"Open {name or 'the file you chose'} on the Mac", "ok": True}], lang, also_mac)
+
+
+def device_line(d, lang: str) -> str:
+    if d.kind == "robot":
+        r = hub.robot_state.get(d.id) or {}
+        st = r.get("state") or ("لم يُستخدم بعد" if lang == "ar" else "not used yet")
+    else:
+        on = hub.device_state.get(d.id)
+        st = ("يعمل" if on else "مطفأ" if on is False else "لم يُستخدم بعد") if lang == "ar" else \
+            ("on" if on else "off" if on is False else "not used yet")
+    return f"{d.name_ar if lang == 'ar' and d.name_ar else d.name}: {st}"
+
+
+async def run_status(what: str, person: str, steps: list, lang: str, also_mac: bool, asker: str) -> dict:
+    """Questions about live state: read, change nothing."""
+    ar = lang == "ar"
+    if what == "mac_volume":
+        if not mac_allowed(person):
+            who_ = PEOPLE[person]["name"]
+            return {"status": "refused", "steps": steps + [{"t": f"{who_} may not use the Mac", "ok": False}],
+                    "reply": await new_reply("refused_mac_app", lang, also_mac, person=who_)}
+        return await to_helper({"type": "mac", "action": "get"}, {"mac": "get"},
+                               steps + [{"t": "Read the Mac's volume (nothing changes)", "ok": True}], lang, also_mac)
+    if what == "devices":
+        devs = [d for d in devices.current() if may_use(person, d)]
+        lines = [device_line(d, lang) for d in devs]
+        text = ("الأجهزة: " + "، ".join(lines) + ".") if ar else ("Devices: " + "; ".join(lines) + ".") if lines else \
+            ("لا توجد أجهزة." if ar else "There are no devices you can use.")
+    elif what == "websites":
+        names = [s["name"] for s in sites.load()]
+        text = (("مواقعك: " + "، ".join(names)) if ar else ("Your websites: " + ", ".join(names) + ".")) if names else \
+            ("لا توجد مواقع محفوظة." if ar else "You have no websites saved yet.")
+    elif what == "apps":
+        names = sorted(hub.mac_apps)
+        some = ", ".join(n for n in ("Notes", "Safari", "Mail", "Calendar", "Music", "Photos") if n in hub.mac_apps)
+        text = (f"على الماك {len(names)} تطبيقًا." if ar else f"There are {len(names)} apps on the Mac"
+                + (f", including {some}." if some else ".")) if names else \
+            ("مساعد الماك غير متصل." if ar else "The Mac helper isn't connected, so I can't see its apps.")
+    elif what == "files":
+        mine = [r.title for r in RECORDS if allowed(person, r)]
+        lib = get_library()
+        text = ("ملفاتك في السجلات: " + "، ".join(mine)) if ar else \
+            ("In Records: " + ", ".join(mine) + "." + (" You can also search the shared folder." if lib else "") +
+             (" As the owner, you can ask me to find any file on the Mac." if PEOPLE[person]["role"] == "owner" else ""))
+    else:  # history
+        turns = recent_for(asker)
+        said = [re.sub(r" \[[\w-]+\]", "", t.split(" -> ", 1)[-1]) for t in turns[-3:]]
+        text = (("قبل قليل: " if ar else "Just now: ") + " · ".join(said)) if turns \
+            else ("لم نتحدث عن شيء بعد." if ar else "We haven't done anything yet in the last 10 minutes.")
+    hub.log.append("answer.given", actor="hub", content={"about": what})
+    return {"status": "answer", "steps": steps + [{"t": text, "ok": True}],
+            "reply": await new_reply("not_understood", lang, also_mac, text=text[:400])}
+
+
+# ---------------- several steps from one sentence ----------------
+
+FINAL = ("confirmed", "unconfirmed", "failed")
+PLAIN = {"done": "done", "unsure": "done (not checked)", "failed": "failed", "skipped": "not done",
+         "needs_approval": "waiting for your tap", "waiting": "not started", "phone": "button on the phone",
+         "question": "waiting for your answer", "choose": "waiting for you to pick one"}
+STATE_WORDS = {"done": "done", "unsure": "done, but it couldn't be checked", "failed": "FAILED",
+               "skipped": "NOT done (skipped)", "needs_approval": "NOT done yet: waiting for the person to tap Approve",
+               "waiting": "NOT started yet", "phone": "ready as a button to tap on the phone",
+               "question": "NOT done yet: waiting for the person's answer", "choose": "NOT done yet: they must pick one"}
+NOT_YET = re.compile(r"\b(sent|printed|emailed|is cleaning|started cleaning|on its way)\b|أُرسل|أرسلت|تم إرسال|تم الإرسال|طُبع|تمت الطباعة",
+                     re.I)
+
+
+def public_plan(p: dict) -> dict:
+    out = {"id": p["id"], "state": p["state"], "reply": p.get("reply"), "answer": p.get("answer") or "", "steps": []}
+    for s in p["steps"]:
+        row = {k: s[k] for k in ("label", "state", "detail", "approval", "question", "link", "app", "options") if s.get(k)}
+        if s.get("command") and hub.commands.get(s["command"], {}).get("proof"):
+            row["proof"] = s["command"]
+        out["steps"].append(row)
+    return out
+
+
+async def start_plan(plan, answer: str, skipped: int, said: str, person: str, steps: list, lang: str,
+                     also_mac: bool, asker: str) -> dict:
+    pid = uuid.uuid4().hex[:10]
+    p = {"id": pid, "said": said, "person": person, "lang": lang, "also_mac": also_mac, "asker": asker,
+         "intents": plan, "answer": answer, "state": "running", "reply": None,
+         "steps": [{"label": describe(i), "memo": describe(i, ids=True), "state": "waiting"} for i in plan] +
+                  [{"label": "A step I couldn't match to anything I can do", "state": "skipped"}] * skipped}
+    hub.plans[pid] = p
+    hub.log.append("plan.started", actor=PEOPLE[person]["name"], content={"plan": pid, "steps": str(len(plan))})
+    task = asyncio.create_task(run_plan(pid, 0))
+    hub.tasks.add(task)
+    task.add_done_callback(hub.tasks.discard)
+    return {"status": "plan", "plan": pid, "steps": steps + [{"t": f"{len(plan)} steps, in order", "ok": True}]}
+
+
+async def wait_for_command(cid: str, limit: float = 75) -> dict:
+    until = time.monotonic() + limit
+    while time.monotonic() < until:
+        c = hub.commands.get(cid)
+        if c and c["state"] in FINAL:
+            return c
+        await asyncio.sleep(0.25)
+    return {"state": "failed", "detail": "No answer from the Mac within 75 seconds"}
+
+
+async def settle_step(p: dict, idx: int, res: dict) -> str:
+    """Record one step's result. Returns 'next', 'pause' (waiting for a tap or an answer) or 'stop'."""
+    s, status = p["steps"][idx], res.get("status")
+    if status == "approved" and res.get("then"):  # after a tap: what the approved action then did
+        status = res["then"]
+    if status == "sent":
+        s["command"] = res["command"]
+        s["state"] = "running"
+        c = await wait_for_command(res["command"])
+        s["detail"] = c.get("detail", "")
+        s["state"] = {"confirmed": "done", "unconfirmed": "unsure"}.get(c["state"], "failed")
+    elif status == "needs_approval":
+        s.update(state="needs_approval", approval=res["approval"], question=res.get("question"))
+        hub.approvals[res["approval"]]["plan"] = (p["id"], idx)
+        return "pause"
+    elif status == "open_on_phone":
+        s.update(state="phone", link=res.get("link"), app=res.get("app"), detail=f"Tap to open {res.get('app')}")
+    elif status in ("answer", "approved"):
+        s.update(state="done", detail=outcome_of(res) if status == "answer" else
+                 "Approved by you. Demo only: logged, nothing was really sent")
+    elif status == "question":
+        s.update(state="question", question=res.get("question"), detail=outcome_of(res))
+        return "pause"
+    elif status == "choose":
+        s.update(state="choose", options=res.get("options"), detail=outcome_of(res))
+        return "pause"
+    else:  # refused, not found, no helper, failed, cancelled
+        s.update(state="failed", detail=outcome_of(res))
+    hub.log.append("plan.step", actor="hub", content={"plan": p["id"], "step": str(idx + 1), "state": s["state"]})
+    return "stop" if s["state"] == "failed" else "next"
+
+
+async def run_plan(pid: str, start: int) -> None:
+    p = hub.plans[pid]
+    p["state"] = "running"
+    for idx in range(start, len(p["intents"])):
+        if p["state"] == "cancelled":
+            return
+        p["steps"][idx]["state"] = "running"
+        try:
+            res = await do_intent(p["intents"][idx], p["said"], p["person"], [], p["lang"], False, p["asker"])
+            got = await settle_step(p, idx, res)
+        except Exception as e:  # never leave a plan hanging
+            p["steps"][idx].update(state="failed", detail=f"Error: {type(e).__name__}")
+            got = "stop"
+        if got == "pause":
+            p["state"] = "waiting"
+            await finish_plan(p, waiting=True)
+            return
+        if got == "stop":
+            for s in p["steps"][idx + 1:]:
+                if s["state"] == "waiting":
+                    s["state"] = "skipped"
+            break
+    await finish_plan(p)
+
+
+async def finish_plan(p: dict, waiting: bool = False) -> None:
+    """One spoken reply for the whole sentence: written fresh from the real results (fact-checked),
+    or a fixed sentence."""
+    if not waiting:
+        p["state"] = "done"
+    done = [s for s in p["steps"] if s["state"] in ("done", "unsure", "phone")]
+    failed = next(((i, s) for i, s in enumerate(p["steps"]) if s["state"] == "failed"), None)
+    facts = [f"step {i + 1}: {s['label']} -> {STATE_WORDS.get(s['state'], s['state'])}" +
+             (f" ({s['detail']})" if s.get("detail") else "") for i, s in enumerate(p["steps"])]
+    if p.get("answer"):
+        facts.append(f"answer to the question: {p['answer']}")
+    names = [a.name for a in apps.APPS.values()] + sorted(hub.mac_apps) + [s["name"] for s in sites.load()] + \
+            [d.name for d in devices.current()] + [r.title for r in RECORDS]
+    text = await asyncio.to_thread(understand.write_reply, p["lang"], facts, names) if understand.enabled() else None
+    not_sent = any(s["state"] in ("needs_approval", "waiting", "skipped") for s in p["steps"]) or \
+        any(s["label"].startswith("send ") for s in p["steps"])  # demo: an approved send is only logged
+    if text and not_sent and NOT_YET.search(text):
+        text = None  # it said "sent" / "printed" for something that didn't happen: use the fixed sentence
+    if text is None:
+        if failed:
+            fixed = ("plan_failed", {"n": failed[0] + 1, "problem": failed[1].get("detail", "")})
+        elif waiting:
+            fixed = ("plan_waiting", {"n": len(done)}) if done else ("plan_waiting_first", {})
+        else:
+            fixed = ("plan_done", {"n": len(done)})
+        text = reply(fixed[0], p["lang"], **fixed[1])
+        if p.get("answer") and not failed:
+            text = f"{text} {p['answer']}"
+    p["reply"] = await new_reply("plan_done", p["lang"], p["also_mac"], text=text)
+    hub.log.append("plan.finished", actor="hub", content={"plan": p["id"], "state": p["state"],
+                                                          "done": str(len(done)), "fresh": "no" if text is None else "yes"})
+    remember(p["asker"], p["said"], "; ".join(f"{s.get('memo', s['label'])}: {PLAIN.get(s['state'], s['state'])}"
+                                              for s in p["steps"]), key=p["id"])
+
+
+async def resume_plan(aid: str, answer: dict) -> None:
+    pid, idx = hub.approvals[aid]["plan"]
+    p = hub.plans.get(pid)
+    if not p or p["state"] == "cancelled":
+        return
+    p["state"] = "running"
+    p["reply"] = None
+    got = await settle_step(p, idx, answer)
+    if got == "stop":
+        for s in p["steps"][idx + 1:]:
+            if s["state"] == "waiting":
+                s["state"] = "skipped"
+        await finish_plan(p)
+        return
+    await run_plan(pid, idx + 1)
+
+
+@app.get("/api/plan/{pid}")
+def plan_status(pid: str, request: Request, x_session: str | None = Header(default=None)):
+    who(request, x_session)
+    p = hub.plans.get(pid)
+    if not p:
+        raise HTTPException(404, "Unknown plan")
+    return public_plan(p)
+
+
+@app.post("/api/plan/{pid}/cancel")
+async def plan_cancel(pid: str, request: Request, x_session: str | None = Header(default=None)):
+    who(request, x_session)
+    p = hub.plans.get(pid)
+    if not p:
+        raise HTTPException(404, "Unknown plan")
+    if p["state"] in ("done", "cancelled"):
+        return public_plan(p)
+    p["state"] = "cancelled"
+    for s in p["steps"]:
+        if s["state"] in ("waiting", "needs_approval", "question", "choose"):
+            if s.get("approval") in hub.approvals:
+                hub.approvals[s["approval"]]["cancelled"] = True
+            s["state"] = "skipped"
+    hub.pending.pop(p["asker"], None)
+    p["reply"] = await new_reply("plan_cancelled", p["lang"], p["also_mac"])
+    hub.log.append("plan.finished", actor="hub", content={"plan": pid, "state": "cancelled"})
+    return public_plan(p)
 
 
 def get_library() -> "library.Library | None":
@@ -525,7 +931,9 @@ async def run_app(intent, person: str, steps: list, lang: str, also_mac: bool) -
 def say_action(action: str) -> str:
     return {"start": "start cleaning", "clean": "clean", "pause": "pause", "dock": "go home to charge", "goto": "go to",
             "stop": "stop", "volume_up": "volume up", "volume_down": "volume down", "app:youtube": "open YouTube",
-            "app:netflix": "open Netflix", "hdmi": "change input", "print": "print"}.get(action, f"switch {action}")
+            "app:netflix": "open Netflix", "hdmi": "change input", "print": "print", "toggle": "press power on",
+            "brighter": "make brighter", "dimmer": "dim", "colour": "change the colour of", "mode": "change the mode of"
+            }.get(action, f"switch {action}")
 
 
 async def run_device(intent, dev, person: str, steps: list, lang: str, also_mac: bool, choose: str | None) -> dict:
@@ -541,6 +949,8 @@ async def run_device(intent, dev, person: str, steps: list, lang: str, also_mac:
         hub.log.append("device.failed", actor="hub", content={"kind": intent.kind, "why": "none added"})
         return {"status": "not_found", "steps": steps + [{"t": f"No {intent.kind} is added yet (Scan my Wi-Fi on the Mac)", "ok": False}],
                 "reply": await new_reply("no_device", lang, also_mac, kind=intent.kind)}
+    if dev.kind == "ir" and action in ("on", "off") and action not in dev.actions and "toggle" in dev.actions:
+        action = "toggle"  # one power button on the remote: it switches on and off
     hub.log.append("device.matched", actor="hub", content={"device": dev.id, "action": action})
     steps.append({"t": f"Found “{dev.name}” ({dev.room}): {say_action(action)}", "ok": True})
     if not may_use(person, dev) or action not in dev.actions:
@@ -661,7 +1071,9 @@ def device_outcome(c: dict, msg: dict, confirmed: bool) -> tuple[str, dict]:
     if kind == "tv" and action == "hdmi":
         return "hdmi", kw
     if not confirmed:
-        return {"plug": "switch_unseen", "tv": "tv_unsure", "printer": "print_waiting"}[kind], kw
+        return {"plug": "switch_unseen", "tv": "tv_unsure", "printer": "print_waiting", "ir": "switch_unseen"}[kind], kw
+    if kind == "ir" and action not in ("on", "off"):
+        return "ir_pressed", kw | {"action": action}
     if kind == "printer":
         return "printed", kw | {"file": c["file"]}
     if kind == "tv":
@@ -690,6 +1102,8 @@ def devices_info(request: Request, x_session: str | None = Header(default=None))
             st = hub.robot_state.get(d.id, {})
             row |= {"sub": d.sub, "places": list(d.place_names), "state": plain(st.get("state")) if st else None,
                     "battery": st.get("battery"), "place": st.get("place")}
+        if d.kind == "ir":
+            row["buttons"] = list(d.actions)
         out.append(row)
     return out
 
@@ -704,6 +1118,8 @@ async def scan_wifi(request: Request):
     """Listen for devices on the Wi-Fi (about 6 seconds). Controls nothing."""
     mac_only(request)
     found = await asyncio.to_thread(discover.scan, 6)
+    for b in await asyncio.to_thread(ir_blaster.discover, 3):  # IR blasters (needs the broadlink library)
+        found.append(b | {"key": discover.key_for("ir", b["mac"] or b["address"]), "uid": str(b.get("devtype") or "")})
     hub.found = {f["key"]: f for f in found}
     hub.log.append("network.scanned", actor="hub", content={"found": str(len(found)),
                                                             "kinds": ", ".join(sorted({f["kind"] for f in found}))})
@@ -836,6 +1252,57 @@ async def add_ros(request: Request):
     return {"status": "added", "device": dev.id}
 
 
+@app.post("/api/devices/add-ir")
+async def add_ir(request: Request):
+    """Add something with an infrared remote (e.g. a lamp), worked through a Wi-Fi IR blaster (Mac only).
+    Its buttons are taught next, one by one (/learn)."""
+    mac_only(request)
+    b = await request.json()
+    address = str(b.get("address", "")).strip()
+    if not re.fullmatch(r"[A-Za-z0-9.-]{1,100}", address):
+        raise HTTPException(400, "Type the IR blaster's IP address (the Broadlink app shows it)")
+    mac = str(b.get("mac", "")).strip().lower()
+    if mac and not re.fullmatch(r"([0-9a-f]{2}:){5}[0-9a-f]{2}", mac):
+        raise HTTPException(400, "The blaster's MAC address looks like aa:bb:cc:dd:ee:ff (or leave it empty)")
+    name = str(b.get("name", "")) or "lamp"
+    found = {"key": discover.key_for("ir", f"{address}:{name.lower()}"), "kind": "ir", "label": "IR remote",
+             "model": "via IR blaster", "address": address, "mac": mac or None,
+             "uid": str(b.get("devtype") or "") or None}
+    try:
+        dev = devices.from_found(found, name, b.get("room", ""), b.get("roles") or [], b.get("name_ar", ""))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    devices.save_added([d for d in devices.load_added() if d.id != dev.id] + [dev])
+    hub.log.append("device.added", actor="owner", content={"device": dev.id, "kind": "ir", "name": dev.name,
+                                                           "room": dev.room, "roles": ", ".join(dev.roles)})
+    return {"status": "added", "device": dev.id, "buttons": list(devices.IR_BUTTONS)}
+
+
+def blaster_for(dev):
+    return ir_blaster.IRBlaster(dev.address, dev.mac, int(dev.uid) if (dev.uid or "").isdigit() else None)
+
+
+@app.post("/api/devices/{device_id}/learn")
+async def learn_button(device_id: str, request: Request):
+    """Teach one button: the blaster listens for up to 20 seconds while you press it on the remote (Mac only)."""
+    mac_only(request)
+    button = str((await request.json()).get("button", ""))
+    if button not in devices.IR_BUTTONS:
+        raise HTTPException(400, f"Choose one of: {', '.join(devices.IR_BUTTONS)}")
+    dev = next((d for d in devices.load_added() if d.id == device_id and d.kind == "ir"), None)
+    if dev is None:
+        raise HTTPException(404, "Not a device with a learned remote")
+    try:
+        code = await asyncio.to_thread(blaster_for(dev).learn)
+        devices.teach(device_id, button, code)
+    except (ir_blaster.IRError, ValueError) as e:
+        raise HTTPException(400, str(e))
+    hub.log.append("device.added", actor="owner", content={"device": dev.id, "kind": "ir", "name": dev.name,
+                                                           "button": button})
+    return {"status": "learned", "button": button,
+            "buttons": [b[0] for b in devices.by_id(device_id).buttons] if devices.by_id(device_id) else [button]}
+
+
 @app.get("/api/sites")
 def sites_list(request: Request):
     mac_only(request)
@@ -941,18 +1408,38 @@ def folder_unshare(request: Request):
     return {"status": "unshared"}
 
 
+async def reindex_now() -> None:
+    lib = get_library()
+    if lib:
+        try:
+            counts = await asyncio.to_thread(lib.index)
+            if counts["changed"]:
+                hub.log.append("folder.indexed", actor="hub", content={k: str(v) for k, v in counts.items()})
+        except Exception:
+            pass
+
+
 async def keep_index_fresh() -> None:
-    """Every 60 s, pick up files added, changed or removed in the shared folder."""
-    while True:
-        await asyncio.sleep(60)
-        lib = get_library()
-        if lib:
-            try:
-                counts = await asyncio.to_thread(lib.index)
-                if counts["changed"]:
-                    hub.log.append("folder.indexed", actor="hub", content={k: str(v) for k, v in counts.items()})
-            except Exception:
-                pass
+    """The shared folder's search index follows the folder live: macOS tells us the moment a file is added,
+    changed or deleted (mac_map.Watcher), and only then is the folder read again. Sharing a different folder
+    moves the watch to it."""
+    loop = asyncio.get_running_loop()
+    watcher, watching = None, None
+    try:
+        while True:
+            st = library.settings()
+            folder = str(Path(st["folder"]).resolve()) if st else None
+            if folder != watching:
+                if watcher:
+                    watcher.stop()
+                watcher, watching = None, folder
+                if folder:
+                    watcher = mac_map.Watcher([folder], lambda: asyncio.run_coroutine_threadsafe(reindex_now(), loop),
+                                              recursive=True).start()
+            await asyncio.sleep(2)  # only checks which folder is shared; the files themselves are watched
+    finally:
+        if watcher:
+            watcher.stop()
 
 
 @app.delete("/api/devices/{device_id}")
@@ -995,6 +1482,19 @@ async def approve(aid: str, request: Request, x_session: str | None = Header(def
     a = hub.approvals.get(aid)
     if not a:
         raise HTTPException(404, "Unknown approval")
+    if a.get("cancelled") and "device" not in a:
+        return {"status": "cancelled", "then": "cancelled", "note": "Cancelled before you approved",
+                "steps": [{"t": "Cancelled before you approved", "ok": False}]}
+    first = not a["done"]
+    out = await approve_one(aid, a)
+    if first and a.get("plan") and not a.get("cancelled"):
+        task = asyncio.create_task(resume_plan(aid, out))
+        hub.tasks.add(task)
+        task.add_done_callback(hub.tasks.discard)
+    return out
+
+
+async def approve_one(aid: str, a: dict) -> dict:
     if a.get("site_add"):
         if a["done"]:
             return a["answer"] | {"repeat": True}
@@ -1155,6 +1655,22 @@ async def helper_ws(ws: WebSocket):
     try:
         while True:
             msg = await ws.receive_json()
+            if msg.get("type") == "map":  # the live app map: the full list on connect, then each change at once
+                clean = lambda xs: [str(x)[:80] for x in (xs or []) if isinstance(x, str) and x.strip()][:2000]
+                if "apps" in msg:
+                    hub.mac_apps = set(clean(msg["apps"]))
+                for name in clean(msg.get("added")):
+                    hub.mac_apps.add(name)
+                    hub.log.append("map.added", actor="helper", content={"app": name})
+                for name in clean(msg.get("removed")):
+                    hub.mac_apps.discard(name)
+                    hub.log.append("map.removed", actor="helper", content={"app": name})
+                continue
+            if msg.get("type") == "found":
+                fut = hub.finds.pop(str(msg.get("request_id")), None)
+                if fut and not fut.done():
+                    fut.set_result(msg.get("items") or [])
+                continue
             if msg.get("type") == "spoken" and msg.get("reply_id") in hub.replies:
                 r = hub.replies[msg["reply_id"]]
                 hub.log.append("reply.spoken", actor="helper",
@@ -1176,8 +1692,10 @@ async def helper_ws(ws: WebSocket):
             if c.get("reply") is None:  # attach the reply BEFORE the state changes: the page stops polling then
                 if "mac" in c:
                     after = msg.get("after")
-                    outcome = ("mac_muted" if c["mac"] == "mute" else "mac_volume") if confirmed else \
-                        ("mac_volume_unsure" if msg.get("ok") else "app_failed")
+                    outcome = ("mac_muted" if c["mac"] == "mute" else "mac_volume_is" if c["mac"] == "get"
+                               else "mac_volume") if confirmed else ("mac_volume_unsure" if msg.get("ok") else "app_failed")
+                    if confirmed and c["mac"] == "get" and msg.get("muted"):
+                        outcome = "mac_volume_is_muted"
                     c["reply"] = await new_reply(outcome, c.get("lang", "en"), c.get("also_mac", False),
                                                  after="" if after is None else after, app="the Mac")
                 elif "app" in c:
@@ -1204,6 +1722,7 @@ async def helper_ws(ws: WebSocket):
     finally:
         if hub.helper is ws:
             hub.helper = None
+            hub.mac_apps = set()
             hub.log.append("helper.disconnected", actor="helper")
 
 

@@ -22,6 +22,13 @@ TYPES = {
     "approval.cancelled",  # a waiting approval was dropped (e.g. "stop" was said first)
     "command.understood",  # how a command was understood: Groq or word match (never Groq's raw answer)
     "mac.volume",          # the Mac's own sound was changed
+    "map.added",           # an app was installed on the Mac (the live map added it at once)
+    "map.removed",         # an app was deleted from the Mac (the live map removed it at once)
+    "plan.started",        # one sentence became several steps (how many; never Groq's raw answer)
+    "plan.step",           # one step's outcome
+    "plan.finished",       # done, waiting for a tap, stopped at a failed step, or cancelled
+    "answer.given",        # a question was answered; nothing was done
+    "memory.cleared",      # "forget that": the recent conversation was dropped
     "site.opened",         # a saved website was opened (name and where; the address is in run/sites.json)
     "site.saved",
     "site.removed",

@@ -11,6 +11,8 @@ with a name, a room and who may use it. Added devices live in run/devices.json (
 - Robot (a Roborock vacuum, or a ROS 2 robot via rosbridge): every movement waits for an Approve tap;
   "stop" never does and always goes first. Rooms and spots come from the robot (or the person adding it).
   A pretend vacuum and a pretend ROS robot stand in until a real one of that kind is added.
+- Learned remote (kind "ir"): a lamp or anything else with an infrared remote, through a Wi-Fi IR blaster
+  (Broadlink). Its actions are the remote buttons someone taught it on the Mac (on, off, brighter, …).
 - risky=True (heats or moves, e.g. an oven): always waits for an Approve tap.
 
 All names here are made up (sample data).
@@ -35,14 +37,16 @@ KIND_ACTIONS = {
     "tv": ("on", "off", "volume_up", "volume_down", "mute", "app:youtube", "app:netflix", "hdmi", "pair"),
     "printer": ("print",),
 }
+IR_BUTTONS = ("on", "off", "toggle", "brighter", "dimmer", "colour", "mode")  # buttons that can be taught
 ROBOT_ACTIONS = {"vacuum": ("stop", "pause", "dock", "start", "clean"), "ros": ("stop", "dock", "goto")}
 KIND_WORDS = {
     "plug": ("lamp", "light", "lights", "plug", "المصباح", "مصباح", "الضوء", "ضوء", "الاضاءة", "الإضاءة", "اللمبة", "لمبة"),
     "tv": ("tv", "t v", "television", "telly", "screen", "التلفزيون", "تلفزيون", "التلفاز", "تلفاز", "الشاشة", "شاشة"),
     "printer": ("printer", "الطابعة", "طابعة"),
+    "ir": ("lamp", "light", "lights", "المصباح", "مصباح", "الضوء", "ضوء", "الاضاءة", "الإضاءة", "اللمبة", "لمبة"),
     "robot": ("robot", "vacuum", "hoover", "roborock", "الروبوت", "روبوت", "المكنسة", "مكنسة"),
 }
-KIND_AR = {"plug": "المصباح", "tv": "التلفزيون", "printer": "الطابعة", "robot": "الروبوت"}
+KIND_AR = {"plug": "المصباح", "tv": "التلفزيون", "printer": "الطابعة", "robot": "الروبوت", "ir": "المصباح"}
 ROLES = tuple(sorted({p["role"] for p in PEOPLE.values()}))
 
 
@@ -65,10 +69,16 @@ class Device:
     places: tuple = ()       # robots: ((name, alias, …), …) rooms or spots it knows
     spots: tuple = ()        # ROS: ((name, x, y, heading), …) on the robot's map
     port: int | None = None  # ROS: rosbridge port
+    buttons: tuple = ()      # learned remote: ((button, code), …) taught on the Mac
 
     @property
     def actions(self) -> tuple[str, ...]:
+        if self.kind == "ir":
+            return tuple(b[0] for b in self.buttons)
         return ROBOT_ACTIONS[self.sub] if self.kind == "robot" else KIND_ACTIONS[self.kind]
+
+    def code_for(self, button: str) -> str | None:
+        return next((b[1] for b in self.buttons if b[0] == button), None)
 
     @property
     def needs_tap(self) -> bool:
@@ -132,7 +142,8 @@ def load_added(path: Path | None = None) -> list[Device]:
         try:
             out.append(Device(**{**r, "words": tuple(r["words"]), "roles": tuple(r["roles"]),
                                  "places": tuple(tuple(x) for x in r.get("places", ())),
-                                 "spots": tuple(tuple(x) for x in r.get("spots", ()))}))
+                                 "spots": tuple(tuple(x) for x in r.get("spots", ())),
+                                 "buttons": tuple(tuple(x) for x in r.get("buttons", ()))}))
         except (TypeError, KeyError):
             continue  # a row from an older version: skip it rather than crash
     return out
@@ -164,7 +175,7 @@ def clean(text: str, n: int) -> str:
 def from_found(found: dict, name: str, room: str, roles, name_ar: str = "") -> Device:
     """A device made from one scan result and what the person typed."""
     kind = found["kind"]
-    if kind not in KIND_ACTIONS and kind != "robot":
+    if kind not in KIND_ACTIONS and kind not in ("robot", "ir"):
         raise ValueError("No connector for this device yet")
     name, room = clean(name, 40) or found.get("label", kind), clean(room, 30) or "Office"
     first = name.split(" ")[0]
@@ -184,3 +195,19 @@ def from_found(found: dict, name: str, room: str, roles, name_ar: str = "") -> D
 def may_use(person_id: str, device: Device) -> bool:
     person = PEOPLE.get(person_id)
     return bool(person) and person["role"] in device.roles
+
+
+def teach(device_id: str, button: str, code: str) -> Device:
+    """Save a learned remote button (replacing an old code for it)."""
+    if button not in IR_BUTTONS:
+        raise ValueError(f"Choose one of: {', '.join(IR_BUTTONS)}")
+    if not re.fullmatch(r"[A-Za-z0-9+/=]{8,4000}", code or ""):
+        raise ValueError("That doesn't look like a remote code")
+    added = load_added()
+    dev = next((d for d in added if d.id == device_id and d.kind == "ir"), None)
+    if dev is None:
+        raise ValueError("Not a learned-remote device")
+    from dataclasses import replace
+    new = replace(dev, buttons=tuple(b for b in dev.buttons if b[0] != button) + ((button, code),))
+    save_added([new if d.id == device_id else d for d in added])
+    return new

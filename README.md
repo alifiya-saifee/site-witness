@@ -143,6 +143,52 @@ the Mac or the phone.
   it still mishears, a small fix turns common mishearings back into “on my Mac”.
 - When it doesn't understand, it says so (and what you can say), instead of “I couldn't find that file”.
 
+## A dynamic assistant: several things at once, memory, answers, any app, any file
+
+- **Several things in one sentence:** “open Notes and set the Mac volume to 30”, «افتح يوتيوب على الماك وارفع الصوت».
+  Groq turns the sentence into up to 5 steps, each checked like a single command. They run **in order**: the next
+  starts when the Mac has finished (and checked) the one before. The page shows a checklist (✓ done, ⏸ waiting
+  for your tap, ✕ failed, – not done) with proof pictures, and **Stop the rest**.
+  - A step that needs a tap (send, print, a robot moving) waits with its own **Approve** button; the steps after it
+    run once you approve.
+  - A failed or refused step stops the rest, and it says which and why. A step Groq made up is skipped, never run.
+- **Memory:** the last 6 turns per phone (and the Mac), for 10 minutes, kept in memory only (never saved). So “now
+  send **it** to Omar”, “turn it up more” and “open it on my Mac” work. “Forget that” / «انسَ» clears it.
+- **Questions and answers:** “what's the Mac's volume?” (read, nothing changes), “which devices are on?”, “what
+  websites do I have?”, “what did I just do?”. A general question (“what's 15% of 2000?”) gets a short answer and
+  nothing is done. Something it can't do (“order a pizza”) gets an honest “I can't”. An answer may never claim
+  something was done.
+- **Fresh spoken replies:** after a list of steps, Groq writes one short reply from the real results. It is kept
+  only if every number and name in it is in those results, and it may never say “sent” for something that wasn't
+  (in this demo a send is only logged). Otherwise a fixed sentence is used.
+- **Any app on the Mac:** the helper keeps a **live map** of installed apps (`sitewitness/mac_map.py`). Install an
+  app and it is on the map at once; delete it and it's gone at once (macOS file-change notices, no timers). “Open
+  Notes”, “open Spotify”: the helper opens only a name on its own map, with `open -a`, then checks it's in front.
+  Owner and Broker only.
+- **Any file on the Mac (Owner only):** the Mac's own Spotlight index is the live file map. “Find my CV on the Mac”
+  lists matching documents (name + folder) to pick from. Never shown: `~/Library`, hidden folders, code projects,
+  `.env`, keys, keychains and password files; only documents, pictures and media. A file is opened by a one-time id
+  the helper handed out, never by a path. Brokers and Visitors search only Records and the shared folder.
+- **The shared folder** updates its search index the moment a file is added, changed or deleted.
+- **Groq's free plan** allows about 8,000 tokens a minute per model (about 3 sentences a minute on the main model).
+  When one model is busy, the next one is used; replies are written with the small model. If all are busy, the
+  word match is used.
+- **Sent to Groq:** the sentence, the recent conversation (what was said and done, names only), and the menu (file
+  titles, app names, website and device names). **Never:** file contents, paths, addresses, tokens or keys.
+
+## A lamp with an infrared remote (IR blaster)
+
+The Mac has no infrared light, so a lamp that only has a remote needs a **Wi-Fi IR blaster** (Broadlink RM4 mini;
+an RM4 Pro if the remote is radio, not infrared). Check first: point your phone's camera at the remote's tip and
+press a button. A flicker of light means infrared.
+
+1. Set the blaster up in the Broadlink app, then `pip install broadlink` in `.venv` (needed only for a real blaster).
+2. Mac page → **A lamp with a remote**: name, room, the blaster's IP, who may use it → **Add**.
+3. Under **Devices**, tap **Teach on**, point the remote at the blaster and press **On** once. Do the same for Off
+   (or **power** if the remote has one button), brighter, dimmer, colour.
+4. “Turn on the lamp” presses the taught button. Infrared can't report back, so the Mac camera takes a before and
+   after photo as proof, and says plainly when it couldn't see a change.
+
 ## Robots
 
 | Robot | Say | Checked by |

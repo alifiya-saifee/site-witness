@@ -30,6 +30,7 @@ TEXT = {
     # devices
     "on":          ("Done. {Device} is on.", "تم. {device} يعمل الآن."),
     "off":         ("Done. {Device} is off.", "تم. أطفأتُ {device}."),
+    "ir_pressed":  ("Done. I pressed {action} for {device}.", "تم. ضغطتُ زر {action} لـ{device}."),
     "switch_unseen": ("I switched it, but the camera couldn't see the change.", "نفّذتُ الأمر، لكن الكاميرا لم ترَ التغيير."),
     "switch_failed": ("Sorry, I couldn't reach {device}.", "عذرًا، لم أتمكن من الوصول إلى {device}."),
     "refused_device": ("Sorry, {person} isn't allowed to use {device}.", "عذرًا، {person} لا يملك صلاحية استخدام {device}."),
@@ -79,6 +80,16 @@ TEXT = {
     "ask_back":    ("Just to check: {q}", "للتأكد: {q}"),
     "mac_volume":  ("Done. The Mac's volume is now {after}.", "تم. صوت الماك الآن {after}."),
     "mac_muted":   ("The Mac is muted.", "تم كتم صوت الماك."),
+    "mac_volume_is": ("The Mac's volume is {after}.", "صوت الماك الآن {after}."),
+    "mac_volume_is_muted": ("The Mac's volume is {after}, but it's muted.", "صوت الماك {after}، لكنه مكتوم."),
+    "forgot":      ("Okay, I've forgotten what we just talked about.", "حسنًا، نسيتُ ما تحدثنا عنه للتو."),
+    "app_not_installed": ("{app} isn't installed on this Mac.", "تطبيق {app} غير مثبّت على هذا الماك."),
+    "plan_done":   ("Done. {n} steps finished.", "تم. اكتملت {n} خطوات."),
+    "plan_waiting_first": ("The first step is waiting for your tap on Approve; the rest follows after it.",
+                           "الخطوة الأولى تنتظر ضغطك على موافقة، ثم يُنفَّذ الباقي."),
+    "plan_waiting": ("{n} steps done. One is waiting for your tap on Approve.", "اكتملت {n} خطوات، وخطوة تنتظر ضغطك على موافقة."),
+    "plan_failed": ("I stopped at step {n}: {problem}", "توقفتُ عند الخطوة {n}: {problem}"),
+    "plan_cancelled": ("Okay, I stopped. The rest wasn't done.", "حسنًا، توقفت. لم يُنفَّذ الباقي."),
     "mac_volume_unsure": ("I changed it, but I couldn't read the Mac's volume back.", "غيّرته، لكن لم أتمكن من قراءة صوت الماك."),
     "site_ask_url": ("I don't have {app} saved yet. What's the address? Say it like: https cosmique dot com.",
                      "لم أحفظ {app} بعد. ما العنوان؟ قله هكذا: https cosmique نقطة com."),
@@ -119,8 +130,8 @@ ROBOT_ACTION_AR = {"start": "بدء التنظيف", "clean": "تنظيف {place
 PLACE_AR = {"Kitchen": "المطبخ", "Living room": "غرفة المعيشة", "Office": "المكتب", "Meeting room": "غرفة الاجتماعات",
             "Reception": "الاستقبال", "Dock": "محطة الشحن"}
 
-KIND_EN = {"plug": "lamp", "tv": "TV", "printer": "printer"}
-KIND_AR = {"plug": "المصباح", "tv": "التلفزيون", "printer": "الطابعة"}
+KIND_EN = {"plug": "lamp", "tv": "TV", "printer": "printer", "ir": "lamp"}
+KIND_AR = {"plug": "المصباح", "tv": "التلفزيون", "printer": "الطابعة", "ir": "المصباح"}
 PROBLEM_AR = {"out of paper": "نفد الورق", "paper jam": "انحشار الورق", "out of toner": "نفد الحبر",
               "a door is open": "باب مفتوح", "a cover is open": "غطاء مفتوح", "offline": "غير متصلة",
               "paused": "متوقفة مؤقتًا"}

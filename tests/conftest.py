@@ -14,6 +14,7 @@ def separate_run_files(monkeypatch, tmp_path):
     monkeypatch.setattr(library, "INDEX", tmp_path / "run-search.db")
     monkeypatch.setattr(understand, "_cache", {})
     monkeypatch.setattr(understand, "_last_calls", [])
+    monkeypatch.setattr(understand, "_working_model", [])
     monkeypatch.delenv("GROQ_API_KEY", raising=False)
     for k in ("SW_PLUG", "SW_PLUG_HOST", "TAPO_USERNAME", "TAPO_PASSWORD"):
         monkeypatch.delenv(k, raising=False)

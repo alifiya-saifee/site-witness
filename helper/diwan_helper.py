@@ -1,8 +1,11 @@
 """Diwan Helper: the small app on the computer that does what the hub asks, then proves it.
 
-It connects *out* to the hub on this Mac. It does four things, nothing else:
-open a file (Records or the shared folder), open an app from the approved list (sitewitness/apps.py),
-run one allowed action on a device someone added (plug, Samsung TV, printer, robot), and play spoken replies.
+It connects *out* to the hub on this Mac. It does these things, nothing else:
+open a file (Records, the shared folder, or a file it just found for the Owner with Spotlight, by a one-time id),
+open an app (the approved list in sitewitness/apps.py, or any app on its own live map of installed apps),
+change or read the Mac's volume, open a saved website, run one allowed action on a device someone added
+(plug, Samsung TV, printer, robot, a learned infrared remote), and play spoken replies.
+It keeps the live app map (sitewitness/mac_map.py) and tells the hub the moment an app is installed or deleted.
 - It only accepts a file ID that is in Records, with a one-time token it has not used before.
 - It downloads the file from the hub (never opens a path it is sent), opens it in Preview,
   checks Preview really has it open, takes a screenshot as proof, and sends the result back.
@@ -34,8 +37,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-from sitewitness import apps, devices, sites  # noqa: E402
+from sitewitness import apps, devices, mac_map, sites  # noqa: E402
 from sitewitness.connectors.ipp_printer import Printer, PrinterError  # noqa: E402
+from sitewitness.connectors.ir_blaster import IRBlaster, IRError  # noqa: E402
 from sitewitness.connectors.plug import PlugError, TapoPlug  # noqa: E402
 from sitewitness.connectors.samsung_tv import SamsungTV  # noqa: E402
 from sitewitness.connectors.robots import PretendRobot  # noqa: E402
@@ -102,7 +106,7 @@ def side_by_side(before: bytes, after: bytes) -> bytes:
 class Helper:
     def __init__(self, runner=run, fetch=download, opened_dir: Path = OPENED, wait: float = 6.0,
                  fetch_reply=download_reply, plug=None, settle: float = 1.5, tv_for=None, printer_for=None,
-                 device_list=None, robot_for=None):
+                 device_list=None, robot_for=None, app_map=None, find=None, ir_for=None):
         self.run, self.fetch, self.opened_dir, self.wait = runner, fetch, opened_dir, wait
         self.fetch_reply = fetch_reply
         self.plug = plug if plug is not None else devices.plug_from_env()
@@ -112,6 +116,10 @@ class Helper:
         self.device_list = device_list or devices.current  # read fresh each time: devices can be added or removed
         self.robot_for = robot_for or self._robot_for
         self.used_tokens: set[str] = set()
+        self.app_map = app_map if app_map is not None else mac_map.AppMap()
+        self.found = mac_map.Found()
+        self.find = find or mac_map.find_files
+        self.ir_for = ir_for or (lambda d: IRBlaster(d.address, d.mac, int(d.uid) if (d.uid or "").isdigit() else None))
 
     @staticmethod
     def _robot_for(d):
@@ -150,7 +158,37 @@ class Helper:
             return self.print_file(dev, msg, result)
         if dev.kind == "robot":
             return self.robot(dev, action, msg.get("arg"), result)
+        if dev.kind == "ir":
+            return self.press(dev, action, result)
         return self.switch(dev, action, result)
+
+    def press(self, dev, button: str, result: dict) -> dict:
+        """Press one learned remote button through the IR blaster, then look with the camera: infrared can't
+        report back, so the camera is the only proof."""
+        code = dev.code_for(button)
+        if not code:
+            return result | {"detail": f"Refused: the {button} button hasn't been taught"}
+        before = self.photo()
+        try:
+            self.ir_for(dev).send(code)
+        except IRError as e:
+            return result | {"detail": f"Couldn't use the IR blaster: {e}"}
+        time.sleep(self.settle)
+        after = self.photo()
+        if before is None or after is None:
+            return result | {"ok": True, "confirmed": False,
+                             "detail": f"Pressed {button}. Infrared can't report back, and the camera couldn't take a photo"}
+        (m0, w0), (m1, w1) = brightness(before), brightness(after)
+        up = m1 - m0 >= BRIGHTER or w1 - w0 >= BRIGHT_SHARE
+        down = m0 - m1 >= BRIGHTER or w0 - w1 >= BRIGHT_SHARE
+        seen = up if button in ("on", "brighter") else down if button in ("off", "dimmer") else (up or down)
+        result["proof_b64"] = base64.b64encode(side_by_side(before, after)).decode()
+        change = f"brightness {m0:.0f} → {m1:.0f}"
+        if button in ("on", "off") and seen:
+            result["state"] = button == "on"
+        if not seen:
+            return result | {"ok": True, "confirmed": False, "detail": f"Pressed {button}, but the camera saw no change ({change})"}
+        return result | {"ok": True, "confirmed": True, "detail": f"Pressed {button} and the camera saw it ({change})"}
 
     def tv(self, dev, action: str, result: dict) -> dict:
         r = self.tv_for(dev).do(action)
@@ -194,6 +232,56 @@ class Helper:
         return result | {"ok": True, "confirmed": False, "proof_b64": proof,
                          "detail": f"Opened {app.name}, but {front or 'another app'} is in front"}
 
+    # ---- any app installed on this Mac (from the live map; opened by its exact name, no shell) ----
+    def open_mac_app(self, msg: dict) -> dict:
+        result = {"type": "result", "command_id": msg.get("command_id"), "ok": False}
+        name = str(msg.get("name", ""))
+        if msg.get("type") != "mac_app" or not self.app_map.has(name):
+            return result | {"detail": "Refused: not an app installed on this Mac"}
+        if any(k in msg for k in ("link", "url", "cmd", "command", "path")):
+            return result | {"detail": "Refused: apps are opened only by name"}
+        if not re.fullmatch(r"[0-9a-f]{12}", str(msg.get("command_id", ""))):
+            return result | {"detail": "Refused: bad command id"}
+        if self.run(["open", "-a", name]).returncode != 0:
+            return result | {"detail": f"The Mac would not open {name}"}
+        deadline, front = time.monotonic() + min(self.wait, 8), ""
+        while True:
+            front = self.front_app()
+            if front.lower() == name.lower() or time.monotonic() > deadline:
+                break
+            time.sleep(0.4)
+        proof = self.screenshot()
+        if front.lower() == name.lower():
+            return result | {"ok": True, "confirmed": True, "proof_b64": proof, "detail": f"{name} opened; it is in front"}
+        return result | {"ok": True, "confirmed": False, "proof_b64": proof,
+                         "detail": f"Opened {name}, but {front or 'another app'} is in front"}
+
+    # ---- files anywhere in your home folder, through Spotlight (Owner only; the hub checks the role) ----
+    def find_files(self, msg: dict) -> dict:
+        out = {"type": "found", "request_id": msg.get("request_id"), "items": []}
+        if msg.get("type") != "find" or not re.fullmatch(r"[0-9a-f]{12}", str(msg.get("request_id", ""))):
+            return out | {"detail": "Refused"}
+        items = []
+        for p in self.find(str(msg.get("words", ""))[:120]):
+            items.append({"id": self.found.add(p), "name": p.name, "folder": mac_map.label(p)})
+        return out | {"items": items}
+
+    def open_found(self, msg: dict) -> dict:
+        result = {"type": "result", "command_id": msg.get("command_id"), "ok": False}
+        if msg.get("type") != "open_found" or any(k in msg for k in ("path", "url", "cmd")):
+            return result | {"detail": "Refused: only a file I found can be opened"}
+        if not re.fullmatch(r"[0-9a-f]{12}", str(msg.get("command_id", ""))):
+            return result | {"detail": "Refused: bad command id"}
+        path = self.found.take(str(msg.get("found_id", "")))
+        if path is None or mac_map.hidden(path) or not path.is_file():
+            return result | {"detail": "Refused: not a file I just found (or it's gone)"}
+        if self.run(["open", str(path)]).returncode != 0:
+            return result | {"detail": "The Mac would not open the file"}
+        time.sleep(min(self.wait, 2))
+        front = self.front_app()
+        return result | {"ok": True, "confirmed": bool(front), "proof_b64": self.screenshot(),
+                         "detail": f"Opened {path.name}" + (f" in {front}" if front else "")}
+
     # ---- the Mac's own sound (built-in osascript; no permission needed) ----
     def _osa(self, script: str):
         return self.run(["osascript", "-e", script])
@@ -207,11 +295,16 @@ class Helper:
     def mac(self, msg: dict) -> dict:
         result = {"type": "result", "command_id": msg.get("command_id"), "ok": False}
         op = msg.get("action")
-        if msg.get("type") != "mac" or op not in ("up", "down", "mute", "unmute", "set"):
+        if msg.get("type") != "mac" or op not in ("up", "down", "mute", "unmute", "set", "get"):
             return result | {"detail": "Refused: not a Mac volume action"}
         if not re.fullmatch(r"[0-9a-f]{12}", str(msg.get("command_id", ""))):
             return result | {"detail": "Refused: bad command id"}
-        before, _ = self.volume()
+        before, was_muted = self.volume()
+        if op == "get":  # read only: nothing changes
+            if before is None:
+                return result | {"detail": "Couldn't read the volume"}
+            return result | {"ok": True, "confirmed": True, "before": before, "after": before, "muted": was_muted,
+                             "detail": f"Volume is {before}" + (" (muted)" if was_muted else "")}
         if op in ("mute", "unmute"):
             script = f"set volume output muted {'true' if op == 'mute' else 'false'}"
         else:
@@ -421,14 +514,28 @@ class Helper:
 async def main():
     import websockets
     helper = Helper()
+    helper.app_map.watch()  # installs and deletes are noticed at once
     print("  Diwan Helper: connecting to the hub on this Mac…", flush=True)
     while True:
         try:
             token = (RUN_DIR / "helper-token").read_text().strip()  # read each time: a restarted hub has a new one
             async with websockets.connect(f"ws://{HUB}/helper/ws?token={token}") as ws:
                 print("  Diwan Helper: connected. Waiting for commands.", flush=True)
+                await ws.send(json.dumps({"type": "map", "apps": helper.app_map.names()}))
+                loop = asyncio.get_running_loop()
+
+                def changed(added, removed, ws=ws, loop=loop):  # from the watcher thread, the moment it happens
+                    print(f"  Diwan Helper: apps added {added}, removed {removed}", flush=True)
+                    asyncio.run_coroutine_threadsafe(
+                        ws.send(json.dumps({"type": "map", "added": added, "removed": removed})), loop)
+                helper.app_map.on_change = changed
                 async for raw in ws:
                     msg = json.loads(raw)
+                    if msg.get("type") == "find":
+                        async def look(m=msg):
+                            await ws.send(json.dumps(await asyncio.to_thread(helper.find_files, m)))
+                        asyncio.create_task(look())
+                        continue
                     if msg.get("type") == "speak":
                         # play in the background so a long reply never holds up the next command
                         async def play(m=msg):
@@ -442,14 +549,16 @@ async def main():
                     what = f"{msg.get('action')} on {msg.get('device_id')}" if is_device else \
                         f"open the app {msg.get('app')}" if kind == "app" else f"Mac volume {msg.get('action')}" \
                         if kind == "mac" else f"open the website {msg.get('site_id')}" if kind == "site" \
-                        else f"open {msg.get('file_id')}"
+                        else f"open the app {msg.get('name')}" if kind == "mac_app" else "open a found file" \
+                        if kind == "open_found" else f"open {msg.get('file_id')}"
                     print(f"  Diwan Helper: asked to {what}", flush=True)
 
                     # each command runs on its own, so "stop" is never stuck behind a robot that is still driving
                     async def work(m=msg, is_device=is_device, kind=kind):
                         try:
                             job = {"device": helper.device, "app": helper.open_app, "mac": helper.mac,
-                                   "site": helper.open_site}.get(kind, helper.open_file)
+                                   "site": helper.open_site, "mac_app": helper.open_mac_app,
+                                   "open_found": helper.open_found}.get(kind, helper.open_file)
                             result = await asyncio.to_thread(job, m)
                         except Exception as e:  # never leave the hub waiting
                             result = {"type": "result", "command_id": m.get("command_id"), "ok": False,

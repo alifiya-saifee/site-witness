@@ -67,6 +67,9 @@ header span{font-size:12px;color:var(--muted)}
 .btn.opt{display:block;width:100%;text-align:left;margin-top:6px}
 .btn.opt small{display:block;color:var(--muted);font-size:12px;font-weight:400;margin-top:3px;line-height:1.35}
 .btn.stop{background:var(--bad);border-color:var(--bad);color:#fff;font-weight:700}
+.pstep span small{display:block;color:var(--muted,#9aa3b2);margin-top:2px}
+.pstep span .btn{display:block;margin-top:6px}
+.pstep span img{display:block;max-width:100%;margin-top:6px;border-radius:8px}
 .btn.app{display:block;text-align:center;text-decoration:none;margin-top:10px;font-size:17px;padding:14px}
 .tog{display:flex;gap:8px;align-items:center;font-size:14px;margin:4px 0}
 .tog input{width:18px;height:18px;accent-color:var(--gold)}
@@ -166,6 +169,17 @@ Dock: 0, 0, 0</textarea></div>
         <div class="row"><label class="tog"><input type="checkbox" data-rosrole="owner" checked> owner</label><label class="tog"><input type="checkbox" data-rosrole="broker" checked> broker</label><label class="tog"><input type="checkbox" data-rosrole="visitor"> visitor</label><button class="btn primary" type="button" id="rosadd">Add</button></div>
       </div>
       <p class="hint" id="roshint"></p>
+    </section>
+
+    <section class="card" id="ircard" hidden>
+      <p class="k">A lamp with a remote (this Mac only)</p>
+      <p class="hint" style="margin:0 0 6px">For things that only have an <b>infrared remote</b>. A Wi-Fi IR blaster (Broadlink RM4 mini) copies the remote’s buttons. Plug it in, set it up in the Broadlink app, then type its IP address here. Next, teach each button under Devices: tap “Teach”, point the remote at the blaster, and press that button once.</p>
+      <div class="found" style="border:0;padding:0">
+        <div class="row"><input type="text" id="irname" value="Lamp" aria-label="Name"><input type="text" id="irroom" value="Office" aria-label="Room"></div>
+        <div class="row"><input type="text" id="iraddr" placeholder="Blaster IP, e.g. 192.168.1.60" aria-label="IR blaster address"></div>
+        <div class="row"><label class="tog"><input type="checkbox" data-irrole="owner" checked> owner</label><label class="tog"><input type="checkbox" data-irrole="broker" checked> broker</label><label class="tog"><input type="checkbox" data-irrole="visitor"> visitor</label><button class="btn primary" type="button" id="iradd">Add</button></div>
+      </div>
+      <p class="hint" id="irhint"></p>
     </section>
 
     <section class="card">
@@ -375,7 +389,7 @@ function setupFolder(){
 function setupScan(){
   if(!isLocal) return;
   setupFolder();
-  $('#scancard').hidden=false; $('#robotcard').hidden=false;
+  $('#scancard').hidden=false; $('#robotcard').hidden=false; $('#ircard').hidden=false;
   $('#scan').onclick=async()=>{
     $('#scan').disabled=true; $('#scanhint').textContent='Listening for about 6 seconds…'; $('#found').innerHTML='';
     let found; try{ found=await api('/api/scan',{method:'POST'}); }catch(e){ $('#scanhint').textContent='Scan failed: '+e.message; $('#scan').disabled=false; return; }
@@ -394,6 +408,13 @@ function setupScan(){
     try{ const vacs=await api('/api/roborock/login',{method:'POST',body:JSON.stringify({code:$('#rrcodein').value})});
       $('#rrhint').textContent=vacs.length?`Found ${vacs.length} on your Roborock account.`:'No vacuums on that account.'; renderFound(vacs, $('#rrfound'), $('#rrhint')); }
     catch(e){ $('#rrhint').textContent=e.message; }
+  };
+  /* a lamp with an infrared remote, through an IR blaster */
+  $('#iradd').onclick=async()=>{
+    const roles=[...document.querySelectorAll('[data-irrole]:checked')].map(x=>x.dataset.irrole);
+    try{ await api('/api/devices/add-ir',{method:'POST',body:JSON.stringify({name:$('#irname').value,room:$('#irroom').value,address:$('#iraddr').value,roles})});
+      $('#irhint').textContent=`Added “${$('#irname').value}”. Now teach its buttons under Devices.`; refresh(); }
+    catch(e){ $('#irhint').textContent='Couldn’t add it: '+e.message; }
   };
   /* ROS 2 robot: address + named spots */
   $('#rosadd').onclick=async()=>{
@@ -447,7 +468,41 @@ async function go(text, choose, lang){
   else $('#said').placeholder='open the Al Noor slides';
   playReply(r.reply);
   if(r.status==='sent') follow(r.command, r.steps);
+  if(r.status==='plan') followPlan(r.plan, r.steps);
   refresh();
+}
+/* Several steps from one sentence: a checklist that fills in as each step finishes. A step that needs a tap
+   shows its Approve button in the list; the steps after it run once you approve. One spoken reply at the end. */
+const MARK={done:['✓','ok'],unsure:['?','wait'],failed:['✕','no'],running:['…','wait'],waiting:['·','wait'],skipped:['–','wait'],
+  needs_approval:['⏸','wait'],phone:['📱','ok'],question:['?','wait'],choose:['?','wait']};
+function drawPlan(p, head){
+  drawSteps(head);
+  $('#steps').insertAdjacentHTML('beforeend', p.steps.map((s,i)=>{ const m=MARK[s.state]||['·','wait'];
+    return `<div class="pstep"><b class="${m[1]}">${m[0]}</b><span>${i+1}. ${esc(s.label)}${s.state==='skipped'?' (not done)':''}`+
+      (s.detail?`<small>${esc(s.detail)}</small>`:'')+
+      (s.state==='needs_approval'?`<button class="btn primary" type="button" data-ap="${esc(s.approval)}">Approve: ${esc(s.question||'go ahead')}</button>`:'')+
+      (s.state==='phone'&&s.link?`<a class="btn primary app" href="${esc(s.link)}" target="_blank" rel="noopener">Open ${esc(s.app)}</a>`:'')+
+      (s.state==='choose'&&s.options?s.options.map(o=>`<button class="btn opt" type="button" data-o="${esc(o.id)}">${esc(o.title)}${o.snippet?`<small>${esc(o.snippet)}</small>`:''}</button>`).join(''):'')+
+      (s.proof?`<img alt="Proof for step ${i+1}" src="/api/proof/${esc(s.proof)}?s=${encodeURIComponent(session)}">`:'')+
+      `</span></div>`; }).join('')+
+    (p.state==='running'||p.state==='waiting'?'<div><button class="btn" type="button" id="pcancel">Stop the rest</button></div>':''));
+  $('#steps').querySelectorAll('[data-ap]').forEach(b=>b.onclick=async()=>{ b.disabled=true; b.textContent='Approved…';
+    try{ await api('/api/approve/'+b.dataset.ap,{method:'POST'}); }catch(e){ b.textContent='Couldn’t approve: '+e.message; } });
+  $('#steps').querySelectorAll('[data-o]').forEach(b=>b.onclick=()=>go(lastSaid,b.dataset.o));
+  const c=$('#pcancel'); if(c) c.onclick=async()=>{ c.disabled=true; await api('/api/plan/'+p.id+'/cancel',{method:'POST'}).catch(()=>null); };
+}
+async function followPlan(pid, head){
+  const until=Date.now()+300000; let spoke=null, last='';
+  while(Date.now()<until){
+    const p=await api('/api/plan/'+pid).catch(()=>null);
+    if(p){
+      const sig=JSON.stringify(p);
+      if(sig!==last){ last=sig; drawPlan(p, head); }
+      if(p.reply && p.reply.id!==spoke){ spoke=p.reply.id; playReply(p.reply); refresh(); }
+      if(p.state==='done'||p.state==='cancelled') return;
+    }
+    await new Promise(res=>setTimeout(res,700));
+  }
 }
 /* phones only let a page open an app straight after a tap, so there is always a button; try at once too */
 function phoneButton(r){
@@ -475,8 +530,11 @@ async function refresh(){
     if(!info.paired && !$('#main').hidden){ session=''; store.set('sw-session',''); start(); return; }  // removed on the Mac
     $('#hdot').classList.toggle('on',info.helper); $('#hdot span').textContent=info.helper?'Mac helper connected':'Mac helper not connected';
     const devs=await api('/api/devices');
-    const icon={plug:'💡',tv:'📺',printer:'🖨️',robot:'🤖'};
-    $('#devices').innerHTML=devs.map(d=>`<div class="dev ${d.on?'on':''}"><span class="bulb" aria-hidden="true">${icon[d.kind]||'🔌'}</span><div class="grow"><b>${esc(d.name[0].toUpperCase()+d.name.slice(1))}</b>${d.pretend?' <span class="sample">pretend</span>':''}<small>${esc(d.room)}${d.model&&d.model!=='pretend'?' · '+esc(d.model):''} · ${d.kind==='robot'?esc(d.state||'not used yet')+(d.place?' · at '+esc(d.place):'')+(d.battery!=null?' · 🔋 '+d.battery+'%':'')+' · '+esc((d.sub==='vacuum'?'rooms: ':'spots: ')+d.places.join(', ')):d.kind==='printer'?'prints after your tap':d.on===true?'on':d.on===false?'off':'not used yet'} · ${esc(d.roles.join(', '))}</small></div>${d.kind==='robot'?`<button class="btn stop" type="button" data-stop="${esc(d.name)}" title="Stops at once, no tap needed">Stop</button>`:''}${isLocal&&!d.pretend&&d.id!=='room-lamp'?`<button class="btn" type="button" data-rm="${esc(d.id)}">Remove</button>`:''}</div>`).join('');
+    const icon={plug:'💡',tv:'📺',printer:'🖨️',robot:'🤖',ir:'💡'};
+    $('#devices').innerHTML=devs.map(d=>`<div class="dev ${d.on?'on':''}"><span class="bulb" aria-hidden="true">${icon[d.kind]||'🔌'}</span><div class="grow"><b>${esc(d.name[0].toUpperCase()+d.name.slice(1))}</b>${d.pretend?' <span class="sample">pretend</span>':''}<small>${esc(d.room)}${d.model&&d.model!=='pretend'?' · '+esc(d.model):''} · ${d.kind==='robot'?esc(d.state||'not used yet')+(d.place?' · at '+esc(d.place):'')+(d.battery!=null?' · 🔋 '+d.battery+'%':'')+' · '+esc((d.sub==='vacuum'?'rooms: ':'spots: ')+d.places.join(', ')):d.kind==='printer'?'prints after your tap':d.kind==='ir'?(d.buttons.length?'buttons: '+esc(d.buttons.join(', ')):'no buttons taught yet'):d.on===true?'on':d.on===false?'off':'not used yet'} · ${esc(d.roles.join(', '))}</small></div>${d.kind==='robot'?`<button class="btn stop" type="button" data-stop="${esc(d.name)}" title="Stops at once, no tap needed">Stop</button>`:''}${isLocal&&!d.pretend&&d.id!=='room-lamp'?`<button class="btn" type="button" data-rm="${esc(d.id)}">Remove</button>`:''}</div>${isLocal&&d.kind==='ir'?`<div class="row teach">${['on','off','toggle','brighter','dimmer','colour'].map(b=>`<button class="btn" type="button" data-teach="${esc(d.id)}" data-b="${b}">Teach ${b==='toggle'?'power':b}${d.buttons.includes(b)?' ✓':''}</button>`).join('')}</div>`:''}`).join('');
+    $('#devices').querySelectorAll('[data-teach]').forEach(b=>b.onclick=async()=>{ const was=b.textContent; b.disabled=true; b.textContent='Press it on the remote now…';
+      try{ await api(`/api/devices/${b.dataset.teach}/learn`,{method:'POST',body:JSON.stringify({button:b.dataset.b})}); refresh(); }
+      catch(e){ b.textContent=was; b.disabled=false; $('#devhint').textContent='Couldn’t learn it: '+e.message; } });
     $('#devices').querySelectorAll('[data-stop]').forEach(b=>b.onclick=()=>go('stop '+b.dataset.stop));
     $('#devices').querySelectorAll('[data-rm]').forEach(b=>b.onclick=async()=>{ await api('/api/devices/'+b.dataset.rm,{method:'DELETE'}); refresh(); });
     $('#devhint').textContent=devs.some(d=>d.pretend)?'No real device is added yet, so this is a pretend lamp on the screen. On the Mac, use “Scan my Wi-Fi” to add your TV or printer.':'Only these devices can be controlled, and only by the people shown.';

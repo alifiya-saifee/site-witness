@@ -84,6 +84,8 @@ class Intent:
     volume_op: str | None = None      # Mac volume: up | down | mute | unmute | set
     level: int | None = None          # Mac volume: 0-100 for "set"
     question: str | None = None       # "unclear": what to ask back
+    mac_app: str | None = None        # any app installed on the Mac, by its exact name (from the live map)
+    what: str | None = None           # "status": what to read (mac_volume | devices | websites | apps | files | history)
 
 
 def any_of(text: str, words) -> bool:
@@ -123,6 +125,7 @@ def device_intent(text: str, devs) -> Intent | None:
         kinds.append("tv")
     if not kinds:
         return None
+    kinds = [k for k in kinds if any(d.kind == k for d in devs)] or kinds  # "lamp": the plug or the learned remote
     kind = kinds[0]
     fits = [d for d in devs if d.kind == kind]
     if len(fits) > 1:  # several of that kind: the name narrows it ("the bedroom TV")

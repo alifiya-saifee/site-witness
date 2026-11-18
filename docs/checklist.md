@@ -47,6 +47,9 @@ Key: ⬜ to build · 🟢 done · ❓ open
 | Search inside files: one shared folder chosen on the Mac (PDF, Word, text); “open the report about …”, “find …”, Arabic too | 🟢 built, tested, tried for real on this Mac (`sitewitness/library.py`) |
 | Pairing: wrong-code lock-out, new code after 20 wrong, joined-phones list with Remove | 🟢 built and tested; try Remove from your phone |
 | Understanding with Groq (menu-checked) + word match backup; Mac volume; saved websites (ask for the address by voice, tap to save); hearing fixes | 🟢 built and tested with Groq faked; real Groq needs `GROQ_API_KEY` in .env |
+| Dynamic assistant: several steps per sentence (in order; a tap pauses, then the rest runs; a failure stops the rest), memory of the last turns (“send it to Omar”), answers and live-state questions, fresh replies fact-checked | 🟢 built, tested, tried live with real Groq on this Mac |
+| Live map of the Mac: any installed app (install/delete noticed at once), any file via Spotlight (Owner only; secrets, system and code files never shown); shared folder index follows file changes at once | 🟢 built, tested, tried live (Notes, Calendar, CV search) |
+| Lamp with an infrared remote via a Broadlink IR blaster: add, teach buttons, press with camera proof | 🟡 built and tested with a fake blaster; needs the blaster (and `pip install broadlink`) |
 | Home Assistant room hub client; commands logged and confirmed | ⬜ |
 | Hub hardware: Pi/mini PC, IR blaster, CEC, Wi-Fi plug | ⬜ |
 | Guiding mode for devices with no interface | ⬜ |
