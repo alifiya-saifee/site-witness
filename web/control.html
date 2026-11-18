@@ -84,18 +84,28 @@ header span{font-size:12px;color:var(--muted)}
   <header><b>Diwan</b><span>Helper demo</span><span class="sample">sample data</span>
     <div class="dot" id="hdot" title="Is the helper on the Mac connected?"><i></i><span>Mac helper</span></div></header>
 
+  <section class="card" id="setup" hidden>
+    <p class="k">First run: who owns this Mac?</p>
+    <p class="hint" style="margin:0 0 10px">The owner can do everything and decides who else may use the hub. Kept only on this Mac (run/people.json).</p>
+    <div class="row"><input type="text" id="oname" placeholder="Your name" aria-label="Owner's name" autocomplete="name"></div>
+    <div class="row"><input type="email" id="oemail" placeholder="Email for drafts (optional)" aria-label="Owner's email"></div>
+    <button class="btn primary" type="button" id="osave" style="margin-top:8px">Save</button>
+    <div class="err" id="oerr"></div>
+  </section>
+
   <section class="card pair" id="pair" hidden>
     <p class="k">Join this Mac</p>
     <p class="hint" style="margin:0 0 10px">Type the 6-digit pairing code shown in the terminal on the Mac.</p>
     <div class="ask"><input id="code" inputmode="numeric" maxlength="6" autocomplete="one-time-code" aria-label="Pairing code"><button class="btn primary" id="join">Join</button></div>
     <div class="err" id="perr"></div>
+    <p class="hint" id="pwait" hidden>The code is right. Now the owner taps <b>Allow</b> on the Mac and chooses whose phone this is. This page carries on by itself.</p>
   </section>
 
   <div id="main" hidden>
     <section class="card">
       <p class="k">Who is speaking</p>
       <div class="people" id="people"></div>
-      <p class="hint">Voice match isn’t built yet, so you pick the person. Each person may open different files.</p>
+      <p class="hint" id="peoplehint"></p>
     </section>
 
     <section class="card">
@@ -158,11 +168,22 @@ header span{font-size:12px;color:var(--muted)}
       <p class="hint" id="fhint"></p>
     </section>
 
+    <section class="card" id="peoplecard" hidden>
+      <p class="k">People (this Mac only)</p>
+      <div id="plist"></div>
+      <div class="found" style="border:0;padding:0;margin-top:8px">
+        <div class="row"><input type="text" id="pname" placeholder="Name" aria-label="Name"><select id="prole" aria-label="Role"></select></div>
+        <div class="row"><input type="email" id="pemail" placeholder="Email for drafts (optional)" aria-label="Email"><button class="btn" type="button" id="padd">Add</button></div>
+      </div>
+      <p class="hint" id="phint">Each phone is tied to one of these people when you allow it. What a person may do depends on their role.</p>
+    </section>
+
     <section class="card" id="sessionscard" hidden>
       <p class="k">Joined phones (this Mac only)</p>
+      <div id="checks"></div>
       <div id="sessions"></div>
       <button class="btn" type="button" id="sreset" style="margin-top:8px">Remove all + new code</button>
-      <p class="hint" id="shint">Only people you give the code to can join. 5 wrong codes lock a device out for a minute.</p>
+      <p class="hint" id="shint">A right code only asks to join: nothing works until you tap Allow here. 5 wrong codes lock a device out for a minute. Phones stay joined for 30 days.</p>
     </section>
 
     <section class="card" id="robotcard" hidden>
@@ -232,7 +253,7 @@ Dock: 0, 0, 0</textarea></div>
 (function(){
 const $=s=>document.querySelector(s);
 const store={ get(k){ try{return localStorage.getItem(k);}catch(e){return null;} }, set(k,v){ try{localStorage.setItem(k,v);}catch(e){} } };
-let session=store.get('sw-session')||'', person=store.get('sw-person')||'layla', people=[], lastSaid='';
+let session=store.get('sw-session')||'', person=store.get('sw-person')||'', people=[], lastSaid='', waitTimer=null;
 const EXAMPLES=['open the Al Noor slides','open the report','send the Al Noor report to Karim','turn on the lamp','turn off the TV','volume up','open YouTube on the TV','print the Al Noor report','turn up the volume on my Mac','open Cosmique website on my Mac','open YouTube on my Mac','open Mail','open Calendar','write an email saying the report is ready','open WhatsApp','WhatsApp message: I’ve sent the report','افتح التقويم على الماك','clean the kitchen','robot go to the meeting room','stop','open the report about the cracked balcony','find lift','افتح عرض النور','ابحث عن تسرب المياه'];
 
 async function api(path,opts={}){
@@ -256,20 +277,66 @@ async function start(){
   const info=await api('/api/info');
   people=info.people;
   $('#hdot').classList.toggle('on',info.helper); $('#hdot span').textContent=info.helper?'Mac helper connected':'Mac helper not connected';
-  if(!info.paired){ $('#pair').hidden=false; $('#main').hidden=true; $('#code').focus(); return; }
+  if(info.setup){ $('#setup').hidden=false; $('#pair').hidden=true; $('#main').hidden=true; $('#oname').focus(); return; }
+  $('#setup').hidden=true;
+  if(!info.paired){
+    $('#pair').hidden=false; $('#main').hidden=true; $('#pwait').hidden=!info.waiting;
+    clearTimeout(waitTimer); if(info.waiting) waitTimer=setTimeout(start,3000); else $('#code').focus();
+    return;
+  }
   $('#pair').hidden=true; $('#main').hidden=false;
   isLocal=!!info.local;
+  if(!isLocal || !people.some(p=>p.id===person)) person=info.me;
+  $('#peoplehint').textContent=isLocal?'You are the owner at the Mac. Pick someone else to try a command as them and see what they may do.':'This phone belongs to the person above. To change it, the owner removes the phone on the Mac and you join again.';
   drawPeople(); drawChips(); setupMic(); setupReplies(info.local); setupScan(); refresh(); setInterval(refresh,3000);
 }
 $('#join').onclick=async()=>{
   $('#perr').textContent='';
-  try{ const r=await api('/api/pair',{method:'POST',body:JSON.stringify({code:$('#code').value})}); session=r.session; store.set('sw-session',session); start(); }
+  try{ const r=await api('/api/pair',{method:'POST',body:JSON.stringify({code:$('#code').value})}); session=r.session; store.set('sw-session',session); $('#code').value=''; start(); }
   catch(e){ $('#perr').textContent=e.message; }
 };
 $('#code').addEventListener('keydown',e=>{ if(e.key==='Enter') $('#join').click(); });
+$('#osave').onclick=async()=>{
+  $('#oerr').textContent='';
+  try{ const r=await api('/api/setup',{method:'POST',body:JSON.stringify({name:$('#oname').value,email:$('#oemail').value})}); person=r.id; store.set('sw-person',person); start(); }
+  catch(e){ $('#oerr').textContent=e.message; }
+};
+/* "Is it really you?" before owner-level actions from a phone: Face ID (a passkey) when the hub has a real https
+   name, otherwise a tap on Allow on the Mac. Then the action is tried again. */
+const b64u=buf=>btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
+const unb64u=s=>Uint8Array.from(atob(s.replace(/-/g,'+').replace(/_/g,'/')+'==='.slice((s.length+3)%4)),c=>c.charCodeAt(0));
+function showCheck(retry){
+  $('#options').innerHTML='<button class="btn primary" type="button" id="checkme">Check it’s me</button><p class="hint" id="checkhint">Needed for a file from the whole Mac, or to approve, from a phone. It lasts 5 minutes.</p>';
+  $('#checkme').onclick=async()=>{
+    const hint=t=>$('#checkhint').textContent=t; $('#checkme').disabled=true;
+    try{
+      const s=await api('/api/check/start',{method:'POST'});
+      if(s.how==='mac'){
+        hint('Now tap Allow on the Mac (under “Joined phones”). Waiting…');
+        const until=Date.now()+120000;
+        while(Date.now()<until){ await new Promise(r=>setTimeout(r,1500)); const i=await api('/api/info').catch(()=>({})); if(i.checked){ $('#options').innerHTML=''; return retry(); } }
+        hint('No tap on the Mac within 2 minutes. Try again.'); $('#checkme').disabled=false; return;
+      }
+      let body;
+      if(s.how==='register'){
+        const c=await navigator.credentials.create({publicKey:{challenge:unb64u(s.challenge),rp:{id:s.rp,name:'Diwan hub'},
+          user:{id:new TextEncoder().encode(s.user),name:s.name,displayName:s.name},pubKeyCredParams:[{type:'public-key',alg:-7}],
+          authenticatorSelection:{userVerification:'required',residentKey:'preferred'},attestation:'none',timeout:60000}});
+        body={kind:'create',challenge:s.challenge,clientDataJSON:b64u(c.response.clientDataJSON),attestationObject:b64u(c.response.attestationObject)};
+      }else{
+        const c=await navigator.credentials.get({publicKey:{challenge:unb64u(s.challenge),rpId:s.rp,userVerification:'required',timeout:60000,
+          allowCredentials:s.ids.map(id=>({type:'public-key',id:unb64u(id)}))}});
+        body={kind:'get',challenge:s.challenge,id:b64u(c.rawId),clientDataJSON:b64u(c.response.clientDataJSON),
+          authenticatorData:b64u(c.response.authenticatorData),signature:b64u(c.response.signature)};
+      }
+      await api('/api/check/passkey',{method:'POST',body:JSON.stringify(body)});
+      $('#options').innerHTML=''; return retry();
+    }catch(e){ hint('The check didn’t work: '+e.message); $('#checkme').disabled=false; }
+  };
+}
 
 function drawPeople(){
-  $('#people').innerHTML=people.map(p=>`<button data-p="${p.id}" aria-pressed="${p.id===person}">${esc(p.name)} · ${esc(p.role)}</button>`).join('');
+  $('#people').innerHTML=people.map(p=>`<button data-p="${esc(p.id)}" aria-pressed="${p.id===person}">${esc(p.name)} · ${esc(p.role)}</button>`).join('');
   document.querySelectorAll('[data-p]').forEach(b=>b.onclick=()=>{ person=b.dataset.p; store.set('sw-person',person); drawPeople(); });
 }
 function drawChips(){
@@ -420,11 +487,27 @@ function setupFolder(){
   $('#fsamples').onclick=()=>act('/api/folder/samples',{method:'POST'},'Adding 3 made-up reports…');
   $('#funshare').onclick=()=>act('/api/folder',{method:'DELETE'},'Stopping…');
   show();
-  const sess=async()=>{ try{ const list=await api('/api/sessions');
-    $('#sessions').innerHTML=list.length?list.map(x=>`<div class="dev"><span class="bulb" aria-hidden="true">📱</span><div class="grow"><b>${esc(x.name)}</b><small>joined ${esc(x.at)} · ${esc(x.ip)}</small></div><button class="btn" type="button" data-sess="${esc(x.id)}">Remove</button></div>`).join(''):'<p class="hint">No phones have joined.</p>';
+  $('#peoplecard').hidden=false;
+  const opts=()=>people.map(p=>`<option value="${esc(p.id)}">${esc(p.name)} (${esc(p.role)})</option>`).join('');
+  const sess=async()=>{ try{ const list=await api('/api/sessions'), checks=await api('/api/checks');
+    $('#checks').innerHTML=checks.map(c=>`<div class="approve"><b>${esc(c.device)} (${esc(c.person||'?')})</b> asks you to confirm it’s really them, for 5 minutes.<button class="btn primary" type="button" data-chk="${esc(c.id)}" style="margin-top:8px;width:100%">Allow</button></div>`).join('');
+    $('#checks').querySelectorAll('[data-chk]').forEach(b=>b.onclick=async()=>{ b.disabled=true; await api('/api/checks/'+b.dataset.chk+'/allow',{method:'POST'}).catch(e=>alert(e.message)); sess(); });
+    $('#sessions').innerHTML=list.length?list.map(x=>x.status==='waiting'
+      ?`<div class="approve"><b>A ${esc(x.name)} wants to join</b> (${esc(x.ip)}, ${esc(x.at)}). Whose phone is it?<div class="row" style="margin-top:6px"><select data-who="${esc(x.id)}" aria-label="Whose phone">${opts()}</select><button class="btn primary" type="button" data-allow="${esc(x.id)}">Allow</button><button class="btn" type="button" data-sess="${esc(x.id)}">Refuse</button></div></div>`
+      :`<div class="dev"><span class="bulb" aria-hidden="true">📱</span><div class="grow"><b>${esc(x.person_name||'?')}’s ${esc(x.name)}</b><small>joined ${esc(x.at)} · last used ${esc(x.last)} · ${esc(x.ip)}${x.passkey?' · Face ID set':''}</small></div><button class="btn" type="button" data-sess="${esc(x.id)}">Remove</button></div>`).join(''):'<p class="hint">No phones have joined.</p>';
+    $('#sessions').querySelectorAll('[data-allow]').forEach(b=>b.onclick=async()=>{ b.disabled=true;
+      await api('/api/sessions/'+b.dataset.allow+'/allow',{method:'POST',body:JSON.stringify({person:document.querySelector(`[data-who="${b.dataset.allow}"]`).value})}).catch(e=>alert(e.message)); sess(); });
     $('#sessions').querySelectorAll('[data-sess]').forEach(b=>b.onclick=async()=>{ await api('/api/sessions/'+b.dataset.sess,{method:'DELETE'}); sess(); }); }catch(e){} };
+  const plist=async()=>{ try{ const list=await api('/api/people'); people=list.map(p=>({id:p.id,name:p.name,role:p.role})); drawPeople();
+    $('#plist').innerHTML=list.map(p=>`<div class="dev"><span class="bulb" aria-hidden="true">👤</span><div class="grow"><b>${esc(p.name)}</b><small>${esc(p.role)}${p.email?' · '+esc(p.email):''}</small></div><button class="btn" type="button" data-prm="${esc(p.id)}">Remove</button></div>`).join('');
+    $('#plist').querySelectorAll('[data-prm]').forEach(b=>b.onclick=async()=>{ if(!confirm('Remove this person? Their phones are logged out too.')) return;
+      try{ await api('/api/people/'+b.dataset.prm,{method:'DELETE'}); $('#phint').textContent='Removed.'; }catch(e){ $('#phint').textContent=e.message; } plist(); sess(); }); }catch(e){} };
+  api('/api/info').then(i=>{ $('#prole').innerHTML=(i.roles||[]).map(r=>`<option${r==='broker'?' selected':''}>${esc(r)}</option>`).join(''); });
+  $('#padd').onclick=async()=>{ try{ await api('/api/people',{method:'POST',body:JSON.stringify({name:$('#pname').value,role:$('#prole').value,email:$('#pemail').value})});
+    $('#phint').textContent=`Added ${$('#pname').value}.`; $('#pname').value=$('#pemail').value=''; plist(); }catch(e){ $('#phint').textContent=e.message; } };
+  plist();
   $('#sreset').onclick=async()=>{ const r=await api('/api/sessions/reset',{method:'POST'}); $('#shint').textContent=`Removed ${r.removed}. The new code is in the terminal on the Mac.`; sess(); };
-  sess(); setInterval(sess,5000);
+  sess(); setInterval(sess,3000);
 }
 function setupScan(){
   if(!isLocal) return;
@@ -497,9 +580,13 @@ async function go(text, choose, lang){
     $('#options').innerHTML=r.options.map(o=>`<button class="btn opt" data-o="${o.id}">${esc(o.title)}${o.snippet?`<small>${esc(o.snippet)}</small>`:''}</button>`).join('');
     $('#options').querySelectorAll('[data-o]').forEach(b=>b.onclick=()=>go(lastSaid,b.dataset.o));
   }
+  if(r.status==='needs_check') showCheck(()=>go(text, choose));
   if(r.status==='needs_approval'){
     $('#approve').hidden=false; $('#aq').textContent=r.question; $('#aok').disabled=false;
-    $('#aok').onclick=async()=>{ $('#aok').disabled=true; const a=await api('/api/approve/'+r.approval,{method:'POST'}); $('#approve').hidden=true;
+    $('#aok').onclick=async()=>{ $('#aok').disabled=true; let a;
+      try{ a=await api('/api/approve/'+r.approval,{method:'POST'}); }
+      catch(e){ $('#aok').disabled=false; if(e.message==='needs_check') showCheck(()=>$('#aok').click()); else $('#aq').textContent=e.message; return; }
+      $('#approve').hidden=true;
       const done=r.steps.slice(0,-1).concat(a.steps||[{t:'Approved by you',ok:true},{t:a.note,ok:true}]);
       drawSteps(done); playReply(a.reply); if(a.then==='sent') follow(a.command, done); if(a.status==='open_on_phone') phoneButton(a); refresh(); };
   }
@@ -527,7 +614,8 @@ function drawPlan(p, head){
       `</span></div>`; }).join('')+
     (p.state==='running'||p.state==='waiting'?'<div><button class="btn" type="button" id="pcancel">Stop the rest</button></div>':''));
   $('#steps').querySelectorAll('[data-ap]').forEach(b=>b.onclick=async()=>{ b.disabled=true; b.textContent='Approved…';
-    try{ await api('/api/approve/'+b.dataset.ap,{method:'POST'}); }catch(e){ b.textContent='Couldn’t approve: '+e.message; } });
+    try{ await api('/api/approve/'+b.dataset.ap,{method:'POST'}); }
+    catch(e){ if(e.message==='needs_check'){ b.disabled=false; b.textContent='Approve (check it’s you first)'; showCheck(()=>b.click()); } else b.textContent='Couldn’t approve: '+e.message; } });
   $('#steps').querySelectorAll('[data-o]').forEach(b=>b.onclick=()=>go(lastSaid,b.dataset.o));
   const c=$('#pcancel'); if(c) c.onclick=async()=>{ c.disabled=true; await api('/api/plan/'+p.id+'/cancel',{method:'POST'}).catch(()=>null); };
 }

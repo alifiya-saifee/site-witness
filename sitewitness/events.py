@@ -42,7 +42,15 @@ TYPES = {
     "file.searched",       # a search in the shared folder (how many found)
     "pairing.failed",      # a wrong pairing code
     "pairing.locked",      # too many wrong codes from one device: joining paused for a minute
-    "pairing.removed",     # the owner logged a joined device out
+    "pairing.removed",
+    "pairing.allowed",     # the owner tapped Allow on the Mac and chose whose phone it is
+    "person.added",        # the owner added a person (name and role; never their email)
+    "person.removed",
+    "check.passed",        # a phone passed a fresh "is it you?" check (Face ID passkey, or confirmed on the Mac)
+    "check.failed",
+    "passkey.added",       # a phone registered a passkey (only its public key is kept)
+    "command.limited",     # a phone sent too many commands in a minute
+    "request.refused",     # a request from another website, a wrong address, or a wrong body type     # the owner logged a joined device out
     "pairing.code_changed",
     "robot.login",         # the Roborock account was linked on the Mac (no email or token is logged)
     "file.not_found",      # nothing matched

@@ -3,8 +3,13 @@
 Run:  python -m sitewitness.server     (or ./run-demo, which also starts the helper)
 
 Safety rules this file keeps:
-- A phone or browser on the Wi-Fi must join with the 6-digit pairing code shown on the Mac.
-  A browser on the Mac itself (localhost) is trusted without the code.
+- A phone joins with the 6-digit code shown on the Mac (new each start), then waits until the owner taps Allow on
+  the Mac and picks whose phone it is. A phone is always that person; a "person" it sends is ignored.
+  Joined phones are kept hashed in run/sessions.json for 30 days. The Mac's own page is the owner.
+- Requests from other websites, to a wrong address (DNS rebinding) or with a non-JSON body are refused.
+- Owner-level actions from a phone (a file from the whole Mac, approving) need a fresh check: Face ID (passkey)
+  or a tap on the Mac. Approvals can be given only by the phone that asked, or the Mac.
+- 30 commands a minute per phone.
 - Only a helper on this Mac, holding the helper token, can connect, and only it can download files.
 - Each file download needs a one-time token tied to one command and one file.
 - "Send" never sends: it creates an approval, and even an approved send is only logged in this demo.
@@ -17,6 +22,8 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextvars
+import json
 import hashlib
 import time
 import os
@@ -30,7 +37,7 @@ from pathlib import Path
 from fastapi import FastAPI, Header, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, Response
 
-from . import apps, bluetooth, devices, discover, library, mac_map, sites, speech, understand, voice
+from . import apps, bluetooth, devices, passkeys, people as people_mod, discover, library, mac_map, sites, speech, understand, voice
 from .connectors import ir_blaster, roborock_vac
 from .commands import parse
 from .devices import may_use
@@ -43,14 +50,26 @@ WEB = ROOT / "web"
 PORT = int((os.environ.get("SW_PORT") or "8040"))              # http, this Mac only (page + helper)
 SECURE_PORT = int((os.environ.get("SW_SECURE_PORT") or "8443"))  # https, for phones on the Wi-Fi (mic needs https)
 LOCAL_HOSTS = {"127.0.0.1", "::1", "localhost"}
+SESSION_DAYS = 30            # a joined phone must join again after this
+CHECK_SECONDS = 300          # a Face ID / Mac check stays fresh this long
+REGISTER_SECONDS = 600       # right after Allow, the phone may add its passkey without another check
+COMMANDS_PER_MINUTE = 30     # per phone
+AUDIO_PATHS = {"/api/transcribe", "/api/voice-sample"}  # the only POSTs whose body is not JSON
+
+CALLER: contextvars.ContextVar[dict] = contextvars.ContextVar("caller", default={})
 
 
 class Hub:
-    def __init__(self, db_path: str = ":memory:"):
+    def __init__(self, db_path: str = ":memory:", sessions_file: Path | None = None,
+                 passkeys_file: Path | None = None):
         self.log = EventLog(db_path)
-        self.pair_code = os.environ.get("SW_PAIR_CODE") or f"{secrets.randbelow(10**6):06d}"
+        self.pair_code = f"{secrets.randbelow(10**6):06d}"   # new each start, never from settings
         self.helper_token = secrets.token_urlsafe(24)
-        self.sessions: dict[str, dict] = {}     # session token -> {name, at, ip}
+        self.sessions_file = sessions_file
+        self.sessions: dict[str, dict] = load_sessions(sessions_file)  # sha256(token) -> phone (never the token)
+        self.passkeys = passkeys.Store(passkeys_file)
+        self.checks: dict[str, dict] = {}        # "confirm on the Mac" checks waiting: id -> {session, person, at}
+        self.rate: dict[str, list[float]] = {}   # session -> times of recent commands
         self.pair_fails: dict[str, list[float]] = {}  # device address -> times of wrong codes
         self.pair_fail_total = 0
         self.library: library.Library | None = None
@@ -72,6 +91,29 @@ class Hub:
         self.plans: dict[str, dict] = {}         # several steps from one sentence, run in order
 
 
+def load_sessions(path: Path | None) -> dict[str, dict]:
+    if path is None:
+        return {}
+    try:
+        data = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return {}
+    now = time.time()
+    return {h: s for h, s in data.items() if isinstance(s, dict) and now - s.get("created", 0) < SESSION_DAYS * 86400}
+
+
+def save_sessions() -> None:
+    if hub.sessions_file is None:
+        return
+    hub.sessions_file.parent.mkdir(exist_ok=True)
+    hub.sessions_file.write_text(json.dumps(hub.sessions))
+    hub.sessions_file.chmod(0o600)
+
+
+def token_hash(token: str) -> str:
+    return hashlib.sha256(token.encode()).hexdigest()
+
+
 hub = Hub()
 app = FastAPI(title="Site Witness hub (helper demo)")
 
@@ -80,31 +122,201 @@ def is_local(host: str | None) -> bool:
     return (host or "") in LOCAL_HOSTS
 
 
+# ---------------- requests from other websites, and wrong addresses ----------------
+
+_lan: list[str] = []
+
+
+def own_names() -> set[str]:
+    """The names this hub answers to. Anything else in Host is refused (stops DNS rebinding)."""
+    if not _lan:
+        _lan.append(lan_ip())
+    extra = {h.strip().lower() for h in (os.environ.get("SW_HOSTS") or "").split(",") if h.strip()}
+    return {"localhost", "127.0.0.1", "::1", "testserver", _lan[0]} | extra
+
+
+def host_name(host: str) -> str:
+    host = host.strip().lower()
+    if host.startswith("["):
+        return host[1:host.find("]")] if "]" in host else host
+    return host.rsplit(":", 1)[0] if host.count(":") == 1 else host
+
+
+def refused_why(request: Request) -> str | None:
+    path = request.url.path
+    host = request.headers.get("host", "")
+    if host_name(host) not in own_names():
+        return "wrong address"
+    if not (path.startswith("/api/") or path.startswith("/helper/")):
+        return None
+    origin = request.headers.get("origin")
+    if origin is not None and origin != f"{request.url.scheme}://{host}":
+        return "another website"
+    if request.headers.get("sec-fetch-site") in ("cross-site", "same-site"):
+        return "another website"
+    if request.method == "POST" and path not in AUDIO_PATHS:
+        kind = (request.headers.get("content-type") or "").split(";")[0].strip().lower()
+        if kind and kind != "application/json":
+            return "not JSON"
+    return None
+
+
+def csp_for_page(html: str) -> str:
+    scripts = re.findall(r"<script>(.*?)</script>", html, re.S)
+    hashes = " ".join(f"'sha256-{base64.b64encode(hashlib.sha256(s.encode()).digest()).decode()}'" for s in scripts)
+    return ("default-src 'self'; script-src 'self' " + hashes + "; style-src 'self' 'unsafe-inline'; "
+            "img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self'; object-src 'none'; "
+            "base-uri 'none'; form-action 'self'; frame-ancestors 'none'")
+
+
+@app.middleware("http")
+async def guard(request: Request, call_next):
+    why = refused_why(request)
+    if why:
+        hub.log.append("request.refused", actor="hub", content={"why": why, "path": request.url.path[:60]})
+        resp = Response('{"detail":"Refused: ' + why + '"}', status_code=403 if why != "not JSON" else 415,
+                        media_type="application/json")
+    else:
+        resp = await call_next(request)
+    resp.headers["X-Frame-Options"] = "DENY"
+    resp.headers["Referrer-Policy"] = "no-referrer"
+    resp.headers["X-Content-Type-Options"] = "nosniff"
+    resp.headers["Cache-Control"] = resp.headers.get("Cache-Control", "no-store")
+    return resp
+
+
+# ---------------- who is asking ----------------
+
+def session_of(token: str | None) -> dict | None:
+    """The joined phone for this token, or None. Expired phones are dropped."""
+    if not token:
+        return None
+    h = token_hash(token)
+    s = hub.sessions.get(h)
+    if s is None:
+        return None
+    now = time.time()
+    if now - s.get("created", 0) > SESSION_DAYS * 86400:
+        hub.sessions.pop(h, None)
+        save_sessions()
+        return None
+    if now - s.get("last", 0) > 60:
+        s["last"] = now
+        save_sessions()
+    return s
+
+
 def who(request: Request, session: str | None) -> str:
-    """Let the request through if it is from this Mac or carries a paired session."""
+    """Let the request through if it is from this Mac or from a phone the owner allowed."""
     if is_local(request.client.host if request.client else None):
         return "this Mac"
-    if session and session in hub.sessions:
-        return "paired device"
-    raise HTTPException(401, "Join with the pairing code first")
+    s = session_of(session)
+    if s is None:
+        raise HTTPException(401, "Join with the pairing code first")
+    if s.get("status") != "allowed":
+        raise HTTPException(403, "Waiting: the owner must tap Allow on the Mac")
+    if s.get("person") not in PEOPLE:
+        raise HTTPException(403, "This phone's person was removed. Join again.")
+    return "paired device"
+
+
+def fresh(s: dict | None) -> bool:
+    return bool(s) and time.time() - s.get("checked", 0) < CHECK_SECONDS
+
+
+def passkey_possible(request: Request) -> bool:
+    """Passkeys need https and a real name (not an IP address), e.g. the Tailscale name."""
+    name = host_name(request.headers.get("host", ""))
+    return request.url.scheme == "https" and bool(re.search(r"[a-z]", name)) and ":" not in name \
+        and name != "localhost"
+
+
+def needs_check(steps: list, what: str) -> dict:
+    """A phone asked for an owner-level action without a fresh check: ask for one first."""
+    hub.log.append("access.refused", actor="hub", content={"why": "needs a fresh check", "what": what})
+    return {"status": "needs_check", "steps": steps + [{"t": f"{what}: check it's you first (Face ID, or confirm on the Mac)", "ok": None}]}
 
 
 @app.get("/")
 def page():
-    return FileResponse(WEB / "control.html")
+    html = (WEB / "control.html").read_text()
+    return Response(html, media_type="text/html", headers={"Content-Security-Policy": csp_for_page(html)})
 
 
 @app.get("/api/info")
 def info(request: Request, x_session: str | None = Header(default=None)):
     local = is_local(request.client.host if request.client else None)
-    return {"local": local, "paired": local or (x_session in hub.sessions),
-            "helper": hub.helper is not None,
-            "people": [{"id": k, **v} for k, v in PEOPLE.items()]}
+    if local:
+        return {"local": True, "paired": True, "helper": hub.helper is not None, "setup": people_mod.needs_setup(),
+                "people": people_mod.public(), "me": people_mod.owner_id(), "roles": list(people_mod.ROLES)}
+    s = session_of(x_session)
+    ok = bool(s) and s.get("status") == "allowed" and s.get("person") in PEOPLE
+    me = PEOPLE.get(s.get("person")) if ok else None
+    return {"local": False, "paired": ok, "waiting": bool(s) and s.get("status") == "waiting",
+            "helper": hub.helper is not None if ok else None,
+            "people": [{"id": s["person"], "name": me["name"], "role": me["role"]}] if ok else [],
+            "me": s["person"] if ok else None, "checked": fresh(s) if ok else False,
+            "passkey": passkey_possible(request) if ok else False,
+            "has_passkey": bool(ok and hub.passkeys.ids_for_session(token_hash(x_session or "")))}
 
+
+# ---------------- people (set up on the Mac) ----------------
+
+@app.post("/api/setup")
+async def setup(request: Request):
+    """First run: the owner types their name on the Mac."""
+    mac_only(request)
+    if not people_mod.needs_setup():
+        raise HTTPException(409, "The owner is already set up")
+    body = await request.json()
+    try:
+        pid = people_mod.add(body.get("name", ""), "owner", body.get("email", ""))
+    except people_mod.PeopleError as e:
+        raise HTTPException(400, str(e))
+    hub.log.append("person.added", actor="owner", content={"person": PEOPLE[pid]["name"], "role": "owner"})
+    return {"id": pid}
+
+
+@app.get("/api/people")
+def people_list(request: Request):
+    mac_only(request)
+    return [p | {"email": PEOPLE[p["id"]]["email"]} for p in people_mod.public()]
+
+
+@app.post("/api/people")
+async def people_add(request: Request):
+    mac_only(request)
+    body = await request.json()
+    try:
+        pid = people_mod.add(body.get("name", ""), body.get("role", ""), body.get("email", ""))
+    except people_mod.PeopleError as e:
+        raise HTTPException(400, str(e))
+    hub.log.append("person.added", actor="owner", content={"person": PEOPLE[pid]["name"], "role": PEOPLE[pid]["role"]})
+    return {"id": pid}
+
+
+@app.delete("/api/people/{pid}")
+def people_remove(pid: str, request: Request):
+    mac_only(request)
+    try:
+        p = people_mod.remove(pid)
+    except people_mod.PeopleError as e:
+        raise HTTPException(400, str(e))
+    gone = [h for h, s in hub.sessions.items() if s.get("person") == pid]
+    for h in gone:  # their phones are logged out too
+        hub.sessions.pop(h)
+        hub.passkeys.remove_session(h)
+    save_sessions()
+    hub.log.append("person.removed", actor="owner", content={"person": p["name"], "phones": str(len(gone))})
+    return {"status": "removed", "phones": len(gone)}
+
+
+# ---------------- joining: code on the phone, Allow on the Mac ----------------
 
 @app.post("/api/pair")
 async def pair(request: Request):
-    """Join with the code. 5 wrong tries from one device lock it for a minute; 20 wrong in all make a new code."""
+    """Join with the code. 5 wrong tries from one device lock it for a minute; 20 wrong in all make a new code.
+    A right code only asks to join: nothing works until the owner taps Allow on the Mac and picks the person."""
     ip = request.client.host if request.client else "?"
     now = time.monotonic()
     fails = [t for t in hub.pair_fails.get(ip, []) if now - t < 60]
@@ -121,13 +333,18 @@ async def pair(request: Request):
             new_code("too many wrong codes")
         raise HTTPException(403, "That code is not right. It is shown in the terminal on the Mac.")
     hub.pair_fails.pop(ip, None)
-    token = secrets.token_urlsafe(18)
+    if sum(s.get("status") == "waiting" for s in hub.sessions.values()) >= 5:
+        raise HTTPException(429, "Too many phones are waiting. Allow or remove them on the Mac first.")
+    token = secrets.token_urlsafe(24)
     agent = request.headers.get("user-agent", "")
     name = next((n for k, n in (("iPhone", "iPhone"), ("Android", "Android phone"), ("iPad", "iPad"),
                                 ("Macintosh", "Mac browser"), ("Windows", "Windows PC")) if k in agent), "Browser")
-    hub.sessions[token] = {"name": name, "at": time.strftime("%H:%M"), "ip": ip}
-    hub.log.append("pairing.joined", actor="device", content={"from": ip, "device": name})
-    return {"session": token}
+    t = time.time()
+    hub.sessions[token_hash(token)] = {"name": name, "at": time.strftime("%d %b %H:%M"), "ip": ip, "person": None,
+                                       "status": "waiting", "created": t, "last": t, "checked": 0}
+    save_sessions()
+    hub.log.append("pairing.joined", actor="device", content={"from": ip, "device": name, "status": "waiting for Allow"})
+    return {"session": token, "status": "waiting"}
 
 
 def new_code(why: str) -> None:
@@ -138,24 +355,54 @@ def new_code(why: str) -> None:
 
 
 def session_id(token: str) -> str:
-    return hashlib.sha256(token.encode()).hexdigest()[:8]  # never show the token itself
+    return sid_of(token_hash(token))  # never show the token itself
+
+
+def sid_of(h: str) -> str:
+    return h[:8]
+
+
+def by_sid(sid: str) -> str:
+    gone = [h for h in hub.sessions if sid_of(h) == sid]
+    if not gone:
+        raise HTTPException(404, "Not a joined device")
+    return gone[0]
 
 
 @app.get("/api/sessions")
 def sessions_list(request: Request):
     mac_only(request)
-    return [{"id": session_id(t), **v} for t, v in hub.sessions.items()]
+    return [{"id": sid_of(h), "name": s["name"], "at": s["at"], "ip": s["ip"], "status": s.get("status"),
+             "person": s.get("person"), "person_name": PEOPLE.get(s.get("person") or "", {}).get("name"),
+             "last": time.strftime("%d %b %H:%M", time.localtime(s.get("last", 0))),
+             "passkey": bool(hub.passkeys.ids_for_session(h))} for h, s in hub.sessions.items()]
+
+
+@app.post("/api/sessions/{sid}/allow")
+async def sessions_allow(sid: str, request: Request):
+    """The owner, on the Mac, lets a waiting phone in and says whose phone it is."""
+    mac_only(request)
+    h = by_sid(sid)
+    body = await request.json()
+    person = body.get("person")
+    if person not in PEOPLE:
+        raise HTTPException(400, "Pick whose phone this is")
+    s = hub.sessions[h]
+    s.update(status="allowed", person=person, allowed=time.time())
+    save_sessions()
+    hub.log.append("pairing.allowed", actor="owner", content={"device": s["name"], "person": PEOPLE[person]["name"],
+                                                              "role": PEOPLE[person]["role"]})
+    return {"status": "allowed"}
 
 
 @app.delete("/api/sessions/{sid}")
 def sessions_remove(sid: str, request: Request):
     mac_only(request)
-    gone = [t for t in hub.sessions if session_id(t) == sid]
-    if not gone:
-        raise HTTPException(404, "Not a joined device")
-    for t in gone:
-        info = hub.sessions.pop(t)
-        hub.log.append("pairing.removed", actor="owner", content={"device": info["name"], "from": info["ip"]})
+    h = by_sid(sid)
+    info = hub.sessions.pop(h)
+    hub.passkeys.remove_session(h)
+    save_sessions()
+    hub.log.append("pairing.removed", actor="owner", content={"device": info["name"], "from": info["ip"]})
     return {"status": "removed"}
 
 
@@ -164,28 +411,130 @@ def sessions_reset(request: Request):
     """Log every joined device out and make a new code."""
     mac_only(request)
     n = len(hub.sessions)
+    for h in list(hub.sessions):
+        hub.passkeys.remove_session(h)
     hub.sessions.clear()
+    save_sessions()
     hub.log.append("pairing.removed", actor="owner", content={"device": f"all ({n})"})
     new_code("the owner asked")
     return {"status": "reset", "removed": n}
+
+
+# ---------------- "is it really you?": Face ID passkey, or confirm on the Mac ----------------
+
+def phone_session(request: Request, token: str | None) -> tuple[str, dict]:
+    if is_local(request.client.host if request.client else None):
+        raise HTTPException(400, "The Mac itself doesn't need a check")
+    who(request, token)
+    h = token_hash(token or "")
+    return h, hub.sessions[h]
+
+
+@app.post("/api/check/start")
+async def check_start(request: Request, x_session: str | None = Header(default=None)):
+    h, s = phone_session(request, x_session)
+    if passkey_possible(request):
+        rp = host_name(request.headers["host"])
+        ids = hub.passkeys.ids_for_session(h)
+        if ids:
+            return {"how": "passkey", "challenge": hub.passkeys.challenge(h, "get"), "rp": rp, "ids": ids}
+        if time.time() - s.get("allowed", 0) < REGISTER_SECONDS or fresh(s):
+            return {"how": "register", "challenge": hub.passkeys.challenge(h, "create"), "rp": rp,
+                    "user": sid_of(h), "name": PEOPLE[s["person"]]["name"]}
+    cid = uuid.uuid4().hex[:10]
+    hub.checks = {k: v for k, v in hub.checks.items() if time.time() - v["at"] < 120}
+    hub.checks[cid] = {"session": h, "person": s["person"], "device": s["name"], "at": time.time()}
+    return {"how": "mac", "id": cid}
+
+
+@app.post("/api/check/passkey")
+async def check_passkey(request: Request, x_session: str | None = Header(default=None)):
+    h, s = phone_session(request, x_session)
+    if not passkey_possible(request):
+        raise HTTPException(400, "Passkeys need the hub's https name")
+    body = await request.json()
+    rp, origin = host_name(request.headers["host"]), f"https://{request.headers['host']}"
+    name = PEOPLE[s["person"]]["name"]
+    try:
+        if body.get("kind") == "create":
+            if not (time.time() - s.get("allowed", 0) < REGISTER_SECONDS or fresh(s)):
+                raise passkeys.PasskeyError("adding a passkey needs a check on the Mac first")
+            hub.passkeys.register(h, s["person"], body, rp, origin)
+            hub.log.append("passkey.added", actor=name, content={"device": s["name"]})
+        else:
+            hub.passkeys.verify(h, s["person"], body, rp, origin)
+    except passkeys.PasskeyError as e:
+        hub.log.append("check.failed", actor=name, content={"how": "passkey", "why": str(e)})
+        raise HTTPException(403, f"Face ID check failed: {e}")
+    s["checked"] = time.time()
+    save_sessions()
+    hub.log.append("check.passed", actor=name, content={"how": "passkey", "device": s["name"]})
+    return {"checked": True}
+
+
+@app.get("/api/checks")
+def checks_list(request: Request):
+    mac_only(request)
+    now = time.time()
+    return [{"id": k, "device": v["device"], "person": PEOPLE.get(v["person"], {}).get("name")}
+            for k, v in hub.checks.items() if now - v["at"] < 120]
+
+
+@app.post("/api/checks/{cid}/allow")
+def checks_allow(cid: str, request: Request):
+    mac_only(request)
+    c = hub.checks.pop(cid, None)
+    if not c or time.time() - c["at"] > 120 or c["session"] not in hub.sessions:
+        raise HTTPException(404, "That check is gone. Ask again on the phone.")
+    s = hub.sessions[c["session"]]
+    s["checked"] = time.time()
+    save_sessions()
+    hub.log.append("check.passed", actor=PEOPLE.get(c["person"], {}).get("name", "?"),
+                   content={"how": "confirmed on the Mac", "device": s["name"]})
+    return {"checked": True}
+
+
+# ---------------- commands ----------------
+
+def over_limit(h: str) -> bool:
+    now = time.monotonic()
+    recent = [t for t in hub.rate.get(h, []) if now - t < 60]
+    if len(recent) >= COMMANDS_PER_MINUTE:
+        hub.rate[h] = recent
+        return True
+    hub.rate[h] = recent + [now]
+    return False
 
 
 @app.post("/api/command")
 async def command(request: Request, x_session: str | None = Header(default=None)):
     device = who(request, x_session)
     body = await request.json()
-    said, person, key = str(body.get("text", "")).strip(), body.get("person", "visitor"), body.get("key")
+    said, key = str(body.get("text", "")).strip(), body.get("key")
     choose = body.get("choose")
     if not said:
         raise HTTPException(400, "Say or type a command")
-    if person not in PEOPLE:
-        raise HTTPException(400, "Unknown person")
+    if device == "this Mac":
+        # the owner at the Mac may try a command as anyone (to check who may do what)
+        person = body.get("person") if body.get("person") in PEOPLE else people_mod.owner_id()
+        if person is None:
+            raise HTTPException(409, "Set up the owner on the Mac first")
+        h = None
+    else:
+        h = token_hash(x_session or "")
+        person = hub.sessions[h]["person"]   # a phone is always its person: anything it sends as "person" is ignored
+        if over_limit(h):
+            hub.log.append("command.limited", actor=PEOPLE[person]["name"], content={"device": hub.sessions[h]["name"]})
+            raise HTTPException(429, "Too many commands in a minute. Wait a moment.")
     if key and key in hub.results:
         return hub.results[key] | {"repeat": True}
     lang = lang_of(said, body.get("lang"))
-    asker = "mac" if device == "this Mac" else f"s:{session_id(x_session or '')}"
+    asker = "mac" if h is None else f"s:{sid_of(h)}"
+    CALLER.set({"asker": asker, "session": h})
     answer = await run_command(said, person, device, key, choose, lang, bool(body.get("also_mac")), asker)
-    if key:
+    if answer.get("status") == "needs_check":
+        answer["reply"] = await new_reply("needs_check", lang, bool(body.get("also_mac")))
+    elif key:
         hub.results[key] = answer
     return answer
 
@@ -411,7 +760,7 @@ async def do_intent(intent, said: str, person: str, steps: list, lang: str, also
     if intent.action == "send":
         aid = uuid.uuid4().hex[:10]
         to = intent.recipient or "someone"
-        hub.approvals[aid] = {"file": rec.id, "to": to, "by": name, "done": False, "lang": lang, "also_mac": also_mac}
+        hub.approvals[aid] = {"file": rec.id, "to": to, "by": name, "asker": CALLER.get().get("asker", "mac"), "done": False, "lang": lang, "also_mac": also_mac}
         hub.log.append("approval.requested", actor="hub", content={"approval": aid, "action": "send", "file": rec.id, "to": to})
         return {"status": "needs_approval", "approval": aid, "question": f"Send “{rec.title}” to {to}?",
                 "steps": steps + [{"t": "Sending a file needs your tap", "ok": None}],
@@ -488,6 +837,9 @@ async def open_found(fid: str, person: str, steps: list, lang: str, also_mac: bo
                 "reply": await new_reply("refused", lang, also_mac, person=who_)}
     if not re.fullmatch(r"[0-9a-f]{12}", fid or ""):
         raise HTTPException(400, "Bad choice")
+    h = CALLER.get().get("session")
+    if h and not fresh(hub.sessions.get(h)):
+        return needs_check(steps, "A file from the whole Mac")
     return await to_helper({"type": "open_found", "found_id": fid}, {"file": "found", "title": name or "the file"},
                            steps + [{"t": f"Open {name or 'the file you chose'} on the Mac", "ok": True}], lang, also_mac)
 
@@ -572,7 +924,7 @@ async def start_plan(plan, answer: str, skipped: int, said: str, person: str, st
                      also_mac: bool, asker: str) -> dict:
     pid = uuid.uuid4().hex[:10]
     p = {"id": pid, "said": said, "person": person, "lang": lang, "also_mac": also_mac, "asker": asker,
-         "intents": plan, "answer": answer, "state": "running", "reply": None,
+         "session": CALLER.get().get("session"), "intents": plan, "answer": answer, "state": "running", "reply": None,
          "steps": [{"label": describe(i), "memo": describe(i, ids=True), "state": "waiting"} for i in plan] +
                   [{"label": "A step I couldn't match to anything I can do", "state": "skipped"}] * skipped}
     hub.plans[pid] = p
@@ -628,6 +980,7 @@ async def settle_step(p: dict, idx: int, res: dict) -> str:
 async def run_plan(pid: str, start: int) -> None:
     p = hub.plans[pid]
     p["state"] = "running"
+    CALLER.set({"asker": p["asker"], "session": p.get("session")})  # later steps keep the phone that asked
     for idx in range(start, len(p["intents"])):
         if p["state"] == "cancelled":
             return
@@ -881,7 +1234,7 @@ async def answer_question(pending: dict, asker: str, said: str, person: str, ste
     hub.pending.pop(asker, None)
     aid = uuid.uuid4().hex[:10]
     hub.approvals[aid] = {"site_add": True, "name": pending["name"], "url": url, "target": pending["target"],
-                          "by": PEOPLE[person]["name"], "person": person, "done": False, "lang": lang, "also_mac": also_mac}
+                          "by": PEOPLE[person]["name"], "person": person, "asker": asker, "done": False, "lang": lang, "also_mac": also_mac}
     hub.log.append("approval.requested", actor="hub", content={"approval": aid, "action": "save website", "site": pending["name"]})
     return {"status": "needs_approval", "approval": aid, "question": f"Save “{pending['name']}” as {url} and open it?",
             "steps": steps + [{"t": f"Heard the address as {url}", "ok": True},
@@ -987,7 +1340,7 @@ async def run_device(intent, dev, person: str, steps: list, lang: str, also_mac:
     if dev.needs_tap_for(action):  # printing, robots moving, risky devices: a person taps Approve first, every time
         aid = uuid.uuid4().hex[:10]
         hub.approvals[aid] = {"device": dev.id, "action": action, "file": rec.id if rec else None, "place": place,
-                              "by": name, "done": False, "lang": lang, "also_mac": also_mac}
+                              "by": name, "asker": CALLER.get().get("asker", "mac"), "done": False, "lang": lang, "also_mac": also_mac}
         hub.log.append("approval.requested", actor="hub",
                        content={"approval": aid, "action": say_action(action), "device": dev.id,
                                 **({"file": rec.id} if rec else {}), **({"place": place} if place else {})})
@@ -1549,10 +1902,17 @@ def proof(cid: str, request: Request, s: str | None = None):
 
 @app.post("/api/approve/{aid}")
 async def approve(aid: str, request: Request, x_session: str | None = Header(default=None)):
-    who(request, x_session)
+    device = who(request, x_session)
     a = hub.approvals.get(aid)
     if not a:
         raise HTTPException(404, "Unknown approval")
+    if device != "this Mac":
+        h = token_hash(x_session or "")
+        if a.get("asker") != f"s:{sid_of(h)}":
+            hub.log.append("access.refused", actor="hub", content={"approval": aid, "why": "not the phone that asked"})
+            raise HTTPException(403, "Only the phone that asked (or the Mac) can approve this")
+        if not fresh(hub.sessions[h]):
+            raise HTTPException(403, "needs_check")
     if a.get("cancelled") and "device" not in a:
         return {"status": "cancelled", "then": "cancelled", "note": "Cancelled before you approved",
                 "steps": [{"t": "Cancelled before you approved", "ok": False}]}
@@ -1647,7 +2007,7 @@ async def voice_sample(request: Request, consent: str = ""):
     if r.returncode != 0:
         raise HTTPException(400, "Couldn't read that recording")
     voice.SAMPLE.chmod(0o600)
-    hub.log.append("voice.sample_saved", actor=PEOPLE["layla"]["name"], content={"consent": "own voice, for replies"})
+    hub.log.append("voice.sample_saved", actor="owner", content={"consent": "own voice, for replies"})
     return {"saved": True}
 
 
@@ -1657,7 +2017,7 @@ def voice_sample_delete(request: Request):
         raise HTTPException(403, "Only on the Mac itself")
     if voice.SAMPLE.exists():
         voice.SAMPLE.unlink()
-        hub.log.append("voice.sample_deleted", actor=PEOPLE["layla"]["name"])
+        hub.log.append("voice.sample_deleted", actor="owner")
     return {"deleted": True}
 
 
@@ -1840,14 +2200,19 @@ async def serve() -> None:
     print(f"  On your phone:      https://{ip}:{SECURE_PORT}   (same Wi-Fi)")
     print("                      First time: Chrome says “not private” → Advanced → Proceed. That’s this Mac’s own certificate.")
     print(f"  Pairing code:       {hub.pair_code}")
-    if os.environ.get("SW_PAIR_CODE"):
-        print("  Note: a fixed pairing code (SW_PAIR_CODE) is for testing only. Leave it unset for a new code each run.")
+    print("  A phone that enters the code waits until you tap Allow on this Mac's page.")
     print("  Stop with Ctrl+C\n", flush=True)
     await asyncio.gather(local.serve(), wifi.serve(), keep_index_fresh())
 
 
 def main():
     RUN_DIR.mkdir(exist_ok=True)
+    people_mod.load()
+    hub.sessions_file = RUN_DIR / "sessions.json"
+    hub.sessions = load_sessions(hub.sessions_file)
+    hub.passkeys = passkeys.Store(RUN_DIR / "passkeys.json")
+    if people_mod.needs_setup():
+        print("  First run: open http://localhost:%d on this Mac and type the owner's name." % PORT)
     tok = RUN_DIR / "helper-token"
     tok.write_text(hub.helper_token)
     tok.chmod(0o600)

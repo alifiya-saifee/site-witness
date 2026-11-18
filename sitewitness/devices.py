@@ -28,6 +28,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 from .connectors.plug import PlugError, PretendPlug, TapoPlug  # noqa: F401  (re-exported)
+from .people import ROLES
 from .records import PEOPLE, ROOT
 
 RUN_DIR = ROOT / "run"
@@ -56,7 +57,6 @@ KIND_WORDS = {
 }
 KIND_AR = {"plug": "المصباح", "tv": "التلفزيون", "printer": "الطابعة", "robot": "الروبوت", "ir": "المصباح",
            "ble_lamp": "المصباح", "switchbot": "زر سويتش بوت"}
-ROLES = tuple(sorted({p["role"] for p in PEOPLE.values()}))
 
 
 @dataclass(frozen=True)

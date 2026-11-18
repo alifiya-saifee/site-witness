@@ -3,6 +3,7 @@ import base64
 import pytest
 from fastapi.testclient import TestClient
 
+from phone import join
 from sitewitness import server
 from sitewitness.records import BY_ID
 
@@ -26,7 +27,7 @@ def cmd(client, text, person="layla", **kw):
 def test_a_device_on_the_wifi_must_pair_first(client):
     assert client.post("/api/command", json={"text": "open the Al Noor slides", "person": "layla"}).status_code == 401
     assert client.post("/api/pair", json={"code": "000000" if server.hub.pair_code != "000000" else "111111"}).status_code == 403
-    s = client.post("/api/pair", json={"code": server.hub.pair_code}).json()["session"]
+    s = join(client)
     r = client.post("/api/command", json={"text": "open the Al Noor slides", "person": "layla"}, headers={"X-Session": s})
     assert r.status_code == 200
 
@@ -64,7 +65,7 @@ def test_transcribe_needs_pairing_and_audio(client, monkeypatch):
         return {"text": "open the Al Noor slides", "language": "en"}
     monkeypatch.setattr(server.speech, "transcribe", fake)
     assert client.post("/api/transcribe", content=b"x", headers={"Content-Type": "audio/webm"}).status_code == 401
-    s = client.post("/api/pair", json={"code": server.hub.pair_code}).json()["session"]
+    s = join(client)
     h = {"X-Session": s}
     assert client.post("/api/transcribe", content=b"x", headers=h | {"Content-Type": "text/plain"}).status_code == 415
     assert client.post("/api/transcribe", content=b"", headers=h | {"Content-Type": "audio/webm"}).status_code == 400

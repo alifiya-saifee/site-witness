@@ -5,6 +5,7 @@ import docx
 import pytest
 from fastapi.testclient import TestClient
 
+from phone import join
 from sitewitness import library, server
 from sitewitness.commands import parse
 from sitewitness.devices import LAMP
@@ -195,7 +196,7 @@ def test_wrong_codes_lock_then_change_the_code(client, monkeypatch):
 def test_joined_phones_listed_and_removed(client, monkeypatch):
     phone = TestClient(server.app, headers={"user-agent": "Mozilla/5.0 (iPhone)"})
     monkeypatch.setattr(server, "LOCAL_HOSTS", {"127.0.0.1"})
-    token = phone.post("/api/pair", json={"code": server.hub.pair_code}).json()["session"]
+    token = join(phone)
     assert phone.get("/api/events", headers={"X-Session": token}).status_code == 200
     assert phone.get("/api/sessions", headers={"X-Session": token}).status_code == 403  # the list is Mac only
     monkeypatch.setattr(server, "LOCAL_HOSTS", server.LOCAL_HOSTS | {"testclient"})

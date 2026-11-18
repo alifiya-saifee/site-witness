@@ -7,6 +7,7 @@ from urllib.parse import unquote
 import pytest
 from fastapi.testclient import TestClient
 
+from phone import join
 from sitewitness import apps, devices, replies, server
 from sitewitness.commands import parse
 from sitewitness.devices import LAMP, from_found
@@ -176,7 +177,7 @@ def test_no_helper(client):
 
 def test_phone_mail_button(client, monkeypatch):
     monkeypatch.setattr(server, "LOCAL_HOSTS", {"127.0.0.1"})  # a phone
-    token = client.post("/api/pair", json={"code": server.hub.pair_code}).json()["session"]
+    token = join(client)
     r = client.post("/api/command", headers={"X-Session": token},
                     json={"text": "write an email saying see you at 3", "person": "layla"}).json()
     assert r["status"] == "open_on_phone" and r["link"] == "mailto:?body=see%20you%20at%203" and r["app"] == "Mail"

@@ -1,4 +1,4 @@
-"""Records: the files Diwan knows about, who may open them, and the people in the demo.
+"""Records: the sample files, and which roles may open them.
 
 All files, people and buildings here are made up (sample data).
 The helper can only ever open a file listed here; it never opens a path it is sent.
@@ -41,11 +41,13 @@ RECORDS: tuple[Record, ...] = (
 )
 BY_ID = {r.id: r for r in RECORDS}
 
-# who can speak in the demo (voice match comes later: for now the person is picked on screen)
-PEOPLE = {
-    "layla": {"name": "Layla Mansour", "role": "owner"},
-    "omar": {"name": "Omar Khan", "role": "broker"},
-    "visitor": {"name": "Visitor", "role": "visitor"},
+from .people import PEOPLE  # noqa: E402  (the real people: run/people.json, set up on the Mac)
+
+# made-up people for tests only; a normal run never uses them
+SAMPLE_PEOPLE = {
+    "layla": {"name": "Layla Mansour", "role": "owner", "email": "layla@example.com"},
+    "omar": {"name": "Omar Khan", "role": "broker", "email": "omar@example.com"},
+    "visitor": {"name": "Visitor", "role": "visitor", "email": ""},
 }
 
 

@@ -22,12 +22,14 @@ Say or type “open the Al Noor slides” on your phone; the file opens on the M
 ```
 
 The terminal shows a link for your phone (same Wi-Fi) and a 6-digit pairing code. Stop with Ctrl+C.
+The first time, open `http://localhost:8040` on the Mac and type the owner's name; add other people on the **People** card.
 
 - **Mic:** tap 🎙, speak (English or Arabic), tap again. The page records a short clip and the Mac writes it down with
   Whisper (`small` model, runs on the Mac, no API key; about 480 MB downloaded the first time).
 - **Phone:** use the `https://…:8443` link. The first time, Chrome says “not private”: tap Advanced → Proceed (it is
   this Mac’s own certificate). Browsers only allow a mic on secure pages, so plain `http` is for this Mac only.
-- You pick who is speaking (voice match isn’t built yet). Visitors are refused; “open the report” asks which one;
+- A phone is always the person you chose when you allowed it. The Mac's own page is the owner, and can try a command
+  as someone else to see what they may do. Visitors are refused; “open the report” asks which one;
   “send … to …” waits for your tap and, in this demo, only logs “would send”. Nothing is emailed.
 - macOS asks once for **Screen Recording** (the proof screenshot) and once to let Terminal **control Preview**
   (the “is it really open?” check). If you say no, the page shows “couldn’t confirm” instead of pretending.
@@ -98,10 +100,24 @@ Then say “open the report about the cracked balcony”, “find lift” or «�
 
 ## Pairing
 
-Only someone you give the 6-digit code to can join, and only from your Wi-Fi. A new code is made each run (unless
-`SW_PAIR_CODE` is set, which is for testing only). 5 wrong codes lock that device out for a minute; 20 wrong in all
-make a new code. On the Mac, **Joined phones** lists every joined device with **Remove**, and **Remove all + new
-code** logs everyone out. Joining shares nothing from the phone: it only lets it send commands to this Mac.
+1. The phone types the 6-digit code from the terminal (a new code each run; `SW_PAIR_CODE` is no longer used).
+2. On the Mac, **Joined phones** shows "A iPhone wants to join". Pick whose phone it is and tap **Allow**. Until then
+   the phone can do nothing.
+3. From then on the phone is that person. Anything else it claims is ignored.
+
+- Joined phones stay joined for 30 days, even after a restart. They are kept in `run/sessions.json` only as a hash.
+- 5 wrong codes lock a device out for a minute; 20 wrong in all make a new code.
+- **Remove** logs one phone out; **Remove all + new code** logs everyone out. Removing a person logs out their phones.
+- Each phone may send 30 commands a minute.
+
+**Is it really you?** From a phone, a file from the whole Mac or an **Approve** needs a fresh check, which lasts 5
+minutes. It is either Face ID (a passkey, when the hub has a real https name such as Tailscale's: put that name in
+`SW_HOSTS`), or, on a plain IP address, a tap on **Allow** on the Mac. Only the phone that asked, or the Mac, can
+approve.
+
+**Other websites can't use the hub.** Every request must come to one of the hub's own names (this stops DNS
+rebinding). A request from another website (by its `Origin` / `Sec-Fetch-Site`) is refused, and so is a non-JSON
+body. The page also sends security headers: CSP (only its own script), no framing, and no referrer.
 
 ## Apps (on the Mac or on your phone)
 

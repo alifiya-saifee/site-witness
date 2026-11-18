@@ -26,6 +26,7 @@ TEXT = {
     "needs_approval": ("Send {file} to {to}? Tap Approve.", "هل أرسل {file} إلى {to}؟ اضغط موافقة."),
     "not_found":   ("I couldn't find that file.", "لم أجد هذا الملف."),
     "no_helper":   ("The Mac helper isn't connected.", "مساعد الماك غير متصل."),
+    "needs_check": ("First check it's you: tap the button, then I'll do it.", "تحقّق من هويتك أولًا: اضغط الزر، ثم أنفّذ الطلب."),
     "approved":    ("Approved. In this demo nothing is sent.", "تمت الموافقة. في هذا العرض لا يُرسل شيء."),
     # devices
     "on":          ("Done. {Device} is on.", "تم. {device} يعمل الآن."),
