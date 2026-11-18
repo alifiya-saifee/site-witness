@@ -32,6 +32,8 @@ import re
 import subprocess
 import sys
 import time
+import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -73,6 +75,21 @@ def download(file_id: str, token: str) -> bytes:
         return r.read()
 
 
+MAX_SEND = 100 * 1024 * 1024  # the biggest file sent to a phone
+
+
+def upload(request_id: str, token: str, path: Path) -> None:
+    """Send one found file up to the hub on this Mac (it hands the phone a one-time link). Only the name goes along."""
+    size = path.stat().st_size
+    with open(path, "rb") as f:
+        req = urllib.request.Request(f"http://{HUB}/helper/upload/{request_id}?t={urllib.parse.quote(token)}", data=f,
+                                     method="POST", headers={"Content-Type": "application/octet-stream",
+                                                             "Content-Length": str(size),
+                                                             "X-Name": urllib.parse.quote(path.name)})
+        with urllib.request.urlopen(req, timeout=120) as r:
+            r.read()
+
+
 def download_reply(reply_id: str, token: str) -> bytes:
     with urllib.request.urlopen(f"http://{HUB}/helper/reply/{reply_id}?t={token}", timeout=30) as r:
         return r.read()
@@ -108,7 +125,7 @@ class Helper:
     def __init__(self, runner=run, fetch=download, opened_dir: Path = OPENED, wait: float = 6.0,
                  fetch_reply=download_reply, plug=None, settle: float = 1.5, tv_for=None, printer_for=None,
                  device_list=None, robot_for=None, app_map=None, find=None, ir_for=None, bt_adapters=None,
-                 sphero_for=None):
+                 sphero_for=None, send_up=upload):
         self.run, self.fetch, self.opened_dir, self.wait = runner, fetch, opened_dir, wait
         self.fetch_reply = fetch_reply
         self.plug = plug if plug is not None else devices.plug_from_env()
@@ -126,6 +143,7 @@ class Helper:
         self.sphero_for = sphero_for or (lambda d: sphero.Sphero(d.uid or d.name))
         self.levels: dict[str, int] = {}  # Bluetooth lamps: last brightness we set
         self.loop = None                   # the helper's main loop (Bluetooth runs there); set in main()
+        self.send_up = send_up
 
     @staticmethod
     def _robot_for(d):
@@ -375,6 +393,24 @@ class Helper:
         front = self.front_app()
         return result | {"ok": True, "confirmed": bool(front), "proof_b64": self.screenshot(),
                          "detail": f"Opened {path.name}" + (f" in {front}" if front else "")}
+
+    def send_found(self, msg: dict) -> dict:
+        """A file I found goes to the phone that asked: sent up to the hub, which gives that phone a one-time link."""
+        out = {"type": "upload_done", "request_id": msg.get("request_id"), "ok": False}
+        if msg.get("type") != "send_found" or any(k in msg for k in ("path", "url", "cmd")):
+            return out | {"detail": "Refused: only a file I found can be sent"}
+        if not re.fullmatch(r"[0-9a-f]{12}", str(msg.get("request_id", ""))):
+            return out | {"detail": "Refused: bad request id"}
+        path = self.found.take(str(msg.get("found_id", "")))
+        if path is None or mac_map.hidden(path) or not path.is_file():
+            return out | {"detail": "Refused: not a file I just found (or it's gone)"}
+        if path.stat().st_size > MAX_SEND:
+            return out | {"detail": "That file is over 100 MB"}
+        try:
+            self.send_up(str(msg["request_id"]), str(msg.get("upload", "")), path)
+        except (OSError, urllib.error.URLError) as e:
+            return out | {"detail": f"Couldn't send it ({type(e).__name__})"}
+        return out | {"ok": True, "detail": f"Sent {path.name} for the phone"}
 
     # ---- the Mac's own sound (built-in osascript; no permission needed) ----
     def _osa(self, script: str):
@@ -632,6 +668,13 @@ async def main():
                         async def look(m=msg):
                             await ws.send(json.dumps(await asyncio.to_thread(helper.find_files, m)))
                         asyncio.create_task(look())
+                        continue
+                    if msg.get("type") == "send_found":
+                        async def send(m=msg):
+                            r = await asyncio.to_thread(helper.send_found, m)
+                            print(f"  Diwan Helper: {r['detail']}", flush=True)
+                            await ws.send(json.dumps(r))
+                        asyncio.create_task(send())
                         continue
                     if msg.get("type") == "bt_scan":
                         async def listen(m=msg):

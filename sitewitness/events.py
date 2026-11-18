@@ -49,6 +49,8 @@ TYPES = {
     "check.passed",        # a phone passed a fresh "is it you?" check (Face ID passkey, or confirmed on the Mac)
     "check.failed",
     "passkey.added",       # a phone registered a passkey (only its public key is kept)
+    "file.offered",        # a file was made ready for one phone, by a one-time link (name only, never the path)
+    "file.sent_to_phone",  # that phone downloaded it (name and person)
     "command.limited",     # a phone sent too many commands in a minute
     "request.refused",     # a request from another website, a wrong address, or a wrong body type     # the owner logged a joined device out
     "pairing.code_changed",

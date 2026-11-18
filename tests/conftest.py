@@ -3,7 +3,7 @@
 People are the made-up sample people (Layla owner, Omar broker, Visitor)."""
 import pytest
 
-from sitewitness import devices, library, people, sites, understand
+from sitewitness import devices, library, people, server, sites, understand
 from sitewitness.records import SAMPLE_PEOPLE
 
 
@@ -15,6 +15,8 @@ def separate_run_files(monkeypatch, tmp_path):
     monkeypatch.setattr(library, "SETTINGS", tmp_path / "run-shared.json")
     monkeypatch.setattr(library, "INDEX", tmp_path / "run-search.db")
     monkeypatch.setattr(people, "FILE", tmp_path / "run-people.json")
+    monkeypatch.setattr(server, "OUTBOX", tmp_path / "run-outbox")
+    monkeypatch.setattr(server, "EXTRA_NAMES", set())
     people.PEOPLE.clear()
     people.PEOPLE.update({k: dict(v) for k, v in SAMPLE_PEOPLE.items()})
     monkeypatch.setattr(understand, "_cache", {})

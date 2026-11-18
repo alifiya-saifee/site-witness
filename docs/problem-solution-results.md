@@ -162,7 +162,7 @@ person controls.
 | ✅ | A phone **chooses who it is** from a list: any joined phone could pick the owner | Fixed 18 Nov. Each phone is tied to a person when the owner allows it on the Mac; the hub ignores any `person` a phone sends |
 | ✅ | A website open in the Mac's browser could post to the hub, which trusts this Mac (cross-site request; DNS rebinding) | Fixed 18 Nov. The hub checks Host and Origin on every request, and requires JSON |
 | ✅ | Fixed pairing code in `.env`; joined phones never expire; restarts forget phones | Fixed 18 Nov. A new code each start; sessions last 30 days, saved hashed |
-| 🟠 | Self-signed certificate: a browser warning, and no installable app or passkeys | A real certificate through Tailscale |
+| ✅ | Self-signed certificate: a browser warning, and no installable app or passkeys | Built 18 Nov: a real certificate through Tailscale, turned on by itself once Tailscale is installed (not tried live yet) |
 | ✅ | No limit on commands per phone; no security headers | Fixed 18 Nov. 30 commands a minute per phone; CSP, frame and referrer headers |
 
 ### Who can do what (after the fix)
@@ -181,7 +181,7 @@ person controls.
 2. Records is 4 made-up sample PDFs.
 3. "Send" is only logged.
 4. A pretend lamp and pretend robots appear when no real one is added.
-5. Files found from the phone open on the Mac, not on the phone.
+5. ~~Files found from the phone open on the Mac, not on the phone.~~ Done in Phase 2.
 
 ### The plan (approved 18 Nov)
 **Phase 1: who you are, and closing the holes** ✅ done 18 Nov (257 tests)
@@ -191,7 +191,7 @@ person controls.
   things. It lasts 5 minutes.
 - Host and Origin checks, JSON only, rate limits, security headers, and saved sessions that expire.
 
-**Phase 2: the phone app, from anywhere**
+**Phase 2: the phone app, from anywhere** ✅ built 18 Nov (271 tests); Tailscale waits for your install
 - **Tailscale** (free): a private, encrypted link from your phone to the Mac from anywhere, with a real
   certificate. The Mac is never open to the public internet.
 - **Installable web app:** a home-screen icon, full screen, the mic, phone-first layout.
@@ -228,7 +228,7 @@ person controls.
 
 | Check | Result |
 |---|---|
-| Tests | **257 passing** (Groq, Bluetooth, IR and robots faked; the ROS sim and Roborock simulator tested separately) |
+| Tests | **271 passing** (Groq, Bluetooth, IR and robots faked; the ROS sim and Roborock simulator tested separately) |
 | "Open Notes and set the Mac volume to 30" | 2 steps, both checked (Notes in front; volume 46 → 30), one fresh reply, 2.7 s |
 | «افتح يوتيوب على الماك وارفع الصوت» | 2 steps (YouTube open; volume 30 → 40), Arabic reply |
 | "Open the Al Noor report" → "now send it to Omar" | "it" understood from memory; the send waited for a tap |
@@ -238,6 +238,7 @@ person controls.
 | Live app map | Install noticed in 0.64 s, delete in 0.65 s |
 | Wi-Fi scan | Found the Samsung TV (UA55DU8000) and the HP printer (IPP ready) |
 | Robots | ROS 2 Nav2 simulation: go-to and stop pass; Roborock official simulator passes |
+| Phase 2, live on a scratch copy (phone over https) | "Open the Al Noor slides" → file ready → 81 KB PDF downloaded, a second try refused (410). "Find my CV" → 8 Spotlight results → tap → "check it's you first" → Allow on the Mac → the CV (136 KB) came to the phone; the temporary copy was deleted; no folder path anywhere in the log. Manifest and service worker served |
 | Phase 1, live on a scratch copy | First-run owner set-up; a phone waits for Allow (403 before); allowed as Omar, it claimed to be the owner and was still refused the owner's report; other-site Origin 403, text/plain POST 415, wrong Host 403; CSP header on the page; `sessions.json` mode 600 with no token in it |
 | Bluetooth scan without the library | Says "the Bluetooth library isn't installed yet" instead of failing |
 

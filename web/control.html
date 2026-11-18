@@ -4,6 +4,12 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#0a0d13">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Diwan">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <title>Diwan Helper</title>
 <style>
 :root{
@@ -117,6 +123,14 @@ header span{font-size:12px;color:var(--muted)}
       </form>
       <p class="hint" id="michint"></p>
       <div class="chips" id="chips"></div>
+    </section>
+    <section class="card" id="result" hidden>
+      <p class="k">What happened</p>
+      <div class="steps" id="steps"></div>
+      <div class="said" id="said-back" hidden></div>
+      <div class="options" id="options"></div>
+      <div class="approve" id="approve" hidden><div id="aq"></div><button class="btn primary" id="aok" style="margin-top:8px;width:100%">Approve</button></div>
+      <div class="proof" id="proof"></div>
     </section>
 
     <section class="card">
@@ -233,14 +247,6 @@ Dock: 0, 0, 0</textarea></div>
       <p class="hint" id="vstate"></p>
     </section>
 
-    <section class="card" id="result" hidden>
-      <p class="k">What happened</p>
-      <div class="steps" id="steps"></div>
-      <div class="said" id="said-back" hidden></div>
-      <div class="options" id="options"></div>
-      <div class="approve" id="approve" hidden><div id="aq"></div><button class="btn primary" id="aok" style="margin-top:8px;width:100%">Approve</button></div>
-      <div class="proof" id="proof"></div>
-    </section>
 
     <section class="card">
       <p class="k">Event log</p>
@@ -568,19 +574,20 @@ async function playReply(rep){
     catch(e){ box.insertAdjacentHTML('beforeend','<button class="btn" type="button" id="hear">▶ Hear reply</button>'); $('#hear').onclick=()=>{ a.play(); $('#hear').remove(); }; }
   }catch(e){ $('#vnote').textContent='Couldn’t get the voice: '+e.message; }
 }
-async function go(text, choose, lang){
+async function go(text, choose, lang, where){
   lastSaid=text; if(lang!==undefined) lastLang=lang;
   $('#result').hidden=false; $('#options').innerHTML=''; $('#approve').hidden=true; $('#proof').innerHTML=''; $('#said-back').hidden=true;
   drawSteps([{t:`Heard “${text}”`,ok:null}]);
   let r;
-  try{ r=await api('/api/command',{method:'POST',body:JSON.stringify({text,person,key:key(),choose,lang:lastLang,also_mac:$('#alsomac').checked})}); }
+  try{ r=await api('/api/command',{method:'POST',body:JSON.stringify({text,person,key:key(),choose,where,lang:lastLang,also_mac:$('#alsomac').checked})}); }
   catch(e){ if(e.status===401){ session=''; start(); } drawSteps([{t:e.message,ok:false}]); return; }
   drawSteps(r.steps);
   if(r.status==='choose'){
     $('#options').innerHTML=r.options.map(o=>`<button class="btn opt" data-o="${o.id}">${esc(o.title)}${o.snippet?`<small>${esc(o.snippet)}</small>`:''}</button>`).join('');
     $('#options').querySelectorAll('[data-o]').forEach(b=>b.onclick=()=>go(lastSaid,b.dataset.o));
   }
-  if(r.status==='needs_check') showCheck(()=>go(text, choose));
+  if(r.status==='needs_check') showCheck(()=>go(text, choose, undefined, where));
+  if(r.status==='file') fileReady(r, (choose||'').startsWith('mac:')?null:()=>go(text, choose, undefined, 'mac'));
   if(r.status==='needs_approval'){
     $('#approve').hidden=false; $('#aq').textContent=r.question; $('#aok').disabled=false;
     $('#aok').onclick=async()=>{ $('#aok').disabled=true; let a;
@@ -601,13 +608,14 @@ async function go(text, choose, lang){
 /* Several steps from one sentence: a checklist that fills in as each step finishes. A step that needs a tap
    shows its Approve button in the list; the steps after it run once you approve. One spoken reply at the end. */
 const MARK={done:['✓','ok'],unsure:['?','wait'],failed:['✕','no'],running:['…','wait'],waiting:['·','wait'],skipped:['–','wait'],
-  needs_approval:['⏸','wait'],phone:['📱','ok'],question:['?','wait'],choose:['?','wait']};
+  needs_approval:['⏸','wait'],phone:['📱','ok'],file:['📄','ok'],question:['?','wait'],choose:['?','wait']};
 function drawPlan(p, head){
   drawSteps(head);
   $('#steps').insertAdjacentHTML('beforeend', p.steps.map((s,i)=>{ const m=MARK[s.state]||['·','wait'];
     return `<div class="pstep"><b class="${m[1]}">${m[0]}</b><span>${i+1}. ${esc(s.label)}${s.state==='skipped'?' (not done)':''}`+
       (s.detail?`<small>${esc(s.detail)}</small>`:'')+
       (s.state==='needs_approval'?`<button class="btn primary" type="button" data-ap="${esc(s.approval)}">Approve: ${esc(s.question||'go ahead')}</button>`:'')+
+      (s.state==='file'?`<button class="btn primary" type="button" data-dl="${esc(s.download)}" data-name="${esc(s.name)}">Get it on this phone</button>`:'')+
       (s.state==='phone'&&s.link?`<a class="btn primary app" href="${esc(s.link)}" target="_blank" rel="noopener">Open ${esc(s.app)}</a>`:'')+
       (s.state==='choose'&&s.options?s.options.map(o=>`<button class="btn opt" type="button" data-o="${esc(o.id)}">${esc(o.title)}${o.snippet?`<small>${esc(o.snippet)}</small>`:''}</button>`).join(''):'')+
       (s.proof?`<img alt="Proof for step ${i+1}" src="/api/proof/${esc(s.proof)}?s=${encodeURIComponent(session)}">`:'')+
@@ -617,6 +625,7 @@ function drawPlan(p, head){
     try{ await api('/api/approve/'+b.dataset.ap,{method:'POST'}); }
     catch(e){ if(e.message==='needs_check'){ b.disabled=false; b.textContent='Approve (check it’s you first)'; showCheck(()=>b.click()); } else b.textContent='Couldn’t approve: '+e.message; } });
   $('#steps').querySelectorAll('[data-o]').forEach(b=>b.onclick=()=>go(lastSaid,b.dataset.o));
+  $('#steps').querySelectorAll('[data-dl]').forEach(b=>b.onclick=()=>{ b.disabled=true; fileReady({download:b.dataset.dl,name:b.dataset.name}); });
   const c=$('#pcancel'); if(c) c.onclick=async()=>{ c.disabled=true; await api('/api/plan/'+p.id+'/cancel',{method:'POST'}).catch(()=>null); };
 }
 async function followPlan(pid, head){
@@ -631,6 +640,28 @@ async function followPlan(pid, head){
     }
     await new Promise(res=>setTimeout(res,700));
   }
+}
+/* A file for this phone: taken once from the Mac (a one-time link that lasts 5 minutes), then kept only in this
+   page's memory. Open it, save it, or share it (WhatsApp, Mail…) with the phone's own share sheet. */
+async function fileReady(r, onMac){
+  const box=$('#options');
+  box.innerHTML=`<p class="hint">Getting “${esc(r.name)}” from the Mac…</p>`;
+  let file;
+  try{
+    const res=await fetch('/api/file/'+encodeURIComponent(r.download),{headers:{'X-Session':session}});
+    if(!res.ok){ const b=await res.json().catch(()=>({})); throw new Error(b.detail||res.statusText); }
+    const blob=await res.blob();
+    file=new File([blob], r.name, {type:blob.type||'application/octet-stream'});
+  }catch(e){ box.innerHTML=`<p class="err">Couldn’t get the file: ${esc(e.message)}</p>`; return; }
+  const url=URL.createObjectURL(file);
+  const canShare=navigator.canShare&&navigator.canShare({files:[file]});
+  box.innerHTML=`<div class="row"><a class="btn primary" href="${url}" target="_blank" rel="noopener">Open</a>`+
+    `<a class="btn" href="${url}" download="${esc(r.name)}">Save</a>`+
+    (canShare?'<button class="btn" type="button" id="fshareit">Share…</button>':'')+
+    (onMac?'<button class="btn" type="button" id="fonmac">Open on the Mac instead</button>':'')+'</div>'+
+    `<p class="hint">“${esc(r.name)}” is on this phone now. The link to the Mac is used up.</p>`;
+  if(canShare) $('#fshareit').onclick=()=>navigator.share({files:[file],title:r.name}).catch(()=>{});
+  if(onMac) $('#fonmac').onclick=onMac;
 }
 /* phones only let a page open an app straight after a tap, so there is always a button; try at once too */
 function phoneButton(r){
@@ -670,6 +701,7 @@ async function refresh(){
     $('#log').innerHTML=ev.map(e=>`<div>${esc(e.at.slice(11,19))} ${esc(e.type)} · ${esc(e.actor)} ${esc(Object.values(e.content).filter(v=>typeof v==='string').join(' · '))}</div>`).join('');
   }catch(e){}
 }
+if('serviceWorker' in navigator && window.isSecureContext) navigator.serviceWorker.register('/sw.js').catch(()=>{});
 start().catch(e=>{ document.body.insertAdjacentHTML('beforeend',`<p class="wrap err">Can’t reach the hub: ${esc(e.message)}</p>`); });
 })();
 </script>

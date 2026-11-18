@@ -24,6 +24,7 @@ import asyncio
 import base64
 import contextvars
 import json
+import mimetypes
 import hashlib
 import time
 import os
@@ -36,8 +37,10 @@ from pathlib import Path
 
 from fastapi import FastAPI, Header, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, Response
+from starlette.background import BackgroundTask
+from urllib.parse import unquote
 
-from . import apps, bluetooth, devices, passkeys, people as people_mod, discover, library, mac_map, sites, speech, understand, voice
+from . import apps, bluetooth, devices, passkeys, people as people_mod, tailnet, discover, library, mac_map, sites, speech, understand, voice
 from .connectors import ir_blaster, roborock_vac
 from .commands import parse
 from .devices import may_use
@@ -54,7 +57,11 @@ SESSION_DAYS = 30            # a joined phone must join again after this
 CHECK_SECONDS = 300          # a Face ID / Mac check stays fresh this long
 REGISTER_SECONDS = 600       # right after Allow, the phone may add its passkey without another check
 COMMANDS_PER_MINUTE = 30     # per phone
-AUDIO_PATHS = {"/api/transcribe", "/api/voice-sample"}  # the only POSTs whose body is not JSON
+AUDIO_PATHS = {"/api/transcribe", "/api/voice-sample"}  # POSTs whose body is audio, not JSON
+MAX_FILE = 100 * 1024 * 1024  # the biggest file sent to a phone
+DOWNLOAD_SECONDS = 300        # a file link for a phone works once, within 5 minutes
+OUTBOX = RUN_DIR / "outbox"   # files from the whole Mac wait here (mode 600) until the phone takes them
+EXTRA_NAMES: set[str] = set() # the Tailscale name, once found
 
 CALLER: contextvars.ContextVar[dict] = contextvars.ContextVar("caller", default={})
 
@@ -89,6 +96,8 @@ class Hub:
         self.finds: dict[str, asyncio.Future] = {}  # file searches waiting for the helper's answer
         self.memory: dict[str, list[dict]] = {}  # per phone / the Mac: the last few turns (memory only, never saved)
         self.plans: dict[str, dict] = {}         # several steps from one sentence, run in order
+        self.uploads: dict[str, dict] = {}       # files the helper is sending up: request id -> token, future
+        self.downloads: dict[str, dict] = {}     # one-time links for a phone: id -> file, session, time
 
 
 def load_sessions(path: Path | None) -> dict[str, dict]:
@@ -132,7 +141,7 @@ def own_names() -> set[str]:
     if not _lan:
         _lan.append(lan_ip())
     extra = {h.strip().lower() for h in (os.environ.get("SW_HOSTS") or "").split(",") if h.strip()}
-    return {"localhost", "127.0.0.1", "::1", "testserver", _lan[0]} | extra
+    return {"localhost", "127.0.0.1", "::1", "testserver", _lan[0]} | extra | EXTRA_NAMES
 
 
 def host_name(host: str) -> str:
@@ -154,7 +163,7 @@ def refused_why(request: Request) -> str | None:
         return "another website"
     if request.headers.get("sec-fetch-site") in ("cross-site", "same-site"):
         return "another website"
-    if request.method == "POST" and path not in AUDIO_PATHS:
+    if request.method == "POST" and path not in AUDIO_PATHS and not path.startswith("/helper/upload/"):
         kind = (request.headers.get("content-type") or "").split(";")[0].strip().lower()
         if kind and kind != "application/json":
             return "not JSON"
@@ -241,6 +250,28 @@ def needs_check(steps: list, what: str) -> dict:
 def page():
     html = (WEB / "control.html").read_text()
     return Response(html, media_type="text/html", headers={"Content-Security-Policy": csp_for_page(html)})
+
+
+@app.get("/manifest.webmanifest")
+def manifest():
+    return FileResponse(WEB / "manifest.webmanifest", media_type="application/manifest+json")
+
+
+@app.get("/sw.js")
+def service_worker():
+    return FileResponse(WEB / "sw.js", media_type="text/javascript")
+
+
+@app.get("/icon-{size}.png")
+def icon(size: str):
+    if size not in ("192", "512", "maskable"):
+        raise HTTPException(404, "No such icon")
+    return FileResponse(WEB / "icons" / f"icon-{size}.png", media_type="image/png")
+
+
+@app.get("/apple-touch-icon.png")
+def apple_icon():
+    return FileResponse(WEB / "icons" / "icon-192.png", media_type="image/png")
 
 
 @app.get("/api/info")
@@ -530,7 +561,7 @@ async def command(request: Request, x_session: str | None = Header(default=None)
         return hub.results[key] | {"repeat": True}
     lang = lang_of(said, body.get("lang"))
     asker = "mac" if h is None else f"s:{sid_of(h)}"
-    CALLER.set({"asker": asker, "session": h})
+    CALLER.set({"asker": asker, "session": h, "where": "mac" if body.get("where") == "mac" else ""})
     answer = await run_command(said, person, device, key, choose, lang, bool(body.get("also_mac")), asker)
     if answer.get("status") == "needs_check":
         answer["reply"] = await new_reply("needs_check", lang, bool(body.get("also_mac")))
@@ -722,9 +753,9 @@ async def do_intent(intent, said: str, person: str, steps: list, lang: str, also
         dev = devices.by_id(choose[4:]) if choose and choose.startswith("dev:") else intent.device
         return await run_device(intent, dev, person, steps, lang, also_mac, choose)
     if choose and choose.startswith("lib:") and choose[4:].isdigit():
-        return await open_shared(int(choose[4:]), person, steps, lang, also_mac)
+        return await open_shared(int(choose[4:]), person, steps, lang, also_mac, phone=to_phone(intent))
     if choose and choose.startswith("mac:"):
-        return await open_found(choose[4:], person, steps, lang, also_mac)
+        return await open_found(choose[4:], person, steps, lang, also_mac, phone=to_phone(intent))
     matches = [BY_ID[choose]] if choose in BY_ID else intent.matches
     if intent.search_mode or (not matches and intent.action == "open"):
         found = await search_shared(intent, person, steps, lang, also_mac)
@@ -766,6 +797,8 @@ async def do_intent(intent, said: str, person: str, steps: list, lang: str, also
                 "steps": steps + [{"t": "Sending a file needs your tap", "ok": None}],
                 "reply": await new_reply("needs_approval", lang, also_mac, file=rec.id, to=to)}
 
+    if to_phone(intent):
+        return await offer_download(rec.path, rec.filename, False, steps, lang, also_mac)
     if hub.helper is None:
         hub.log.append("device.failed", actor="hub", content={"file": rec.id, "why": "no helper connected"})
         return {"status": "no_helper", "steps": steps + [{"t": "No helper is connected on the Mac", "ok": False}],
@@ -830,7 +863,8 @@ async def search_mac(intent, person: str, steps: list, lang: str, also_mac: bool
             "reply": await new_reply("search_found", lang, also_mac, n=len(items), q=words)}
 
 
-async def open_found(fid: str, person: str, steps: list, lang: str, also_mac: bool, name: str = "") -> dict:
+async def open_found(fid: str, person: str, steps: list, lang: str, also_mac: bool, name: str = "",
+                     phone: bool = False) -> dict:
     if PEOPLE[person]["role"] != "owner":
         who_ = PEOPLE[person]["name"]
         return {"status": "refused", "steps": steps + [{"t": f"Only the owner can open files from the whole Mac", "ok": False}],
@@ -840,6 +874,16 @@ async def open_found(fid: str, person: str, steps: list, lang: str, also_mac: bo
     h = CALLER.get().get("session")
     if h and not fresh(hub.sessions.get(h)):
         return needs_check(steps, "A file from the whole Mac")
+    if phone:
+        if hub.helper is None:
+            return {"status": "no_helper", "steps": steps + [{"t": "No helper is connected on the Mac", "ok": False}],
+                    "reply": await new_reply("no_helper", lang, False)}
+        got = await fetch_found(fid)
+        if isinstance(got, str):
+            return {"status": "failed", "steps": steps + [{"t": got, "ok": False}],
+                    "reply": await new_reply("failed", lang, also_mac)}
+        return await offer_download(got["path"], got["name"], True, steps + [{"t": "The Mac sent the file", "ok": True}],
+                                    lang, also_mac)
     return await to_helper({"type": "open_found", "found_id": fid}, {"file": "found", "title": name or "the file"},
                            steps + [{"t": f"Open {name or 'the file you chose'} on the Mac", "ok": True}], lang, also_mac)
 
@@ -960,6 +1004,8 @@ async def settle_step(p: dict, idx: int, res: dict) -> str:
         s.update(state="needs_approval", approval=res["approval"], question=res.get("question"))
         hub.approvals[res["approval"]]["plan"] = (p["id"], idx)
         return "pause"
+    elif status == "file":
+        s.update(state="file", download=res["download"], name=res["name"], detail=f"Ready on your phone: {res['name']}")
     elif status == "open_on_phone":
         s.update(state="phone", link=res.get("link"), app=res.get("app"), detail=f"Tap to open {res.get('app')}")
     elif status in ("answer", "approved"):
@@ -1132,7 +1178,7 @@ async def search_shared(intent, person: str, steps: list, lang: str, also_mac: b
     return {"status": "choose", "steps": steps + [{"t": "Which one?", "ok": None}], "options": options, "reply": rep}
 
 
-async def open_shared(fid: int, person: str, steps: list, lang: str, also_mac: bool) -> dict:
+async def open_shared(fid: int, person: str, steps: list, lang: str, also_mac: bool, phone: bool = False) -> dict:
     lib, st = get_library(), library.settings() or {}
     name = PEOPLE[person]["name"]
     if PEOPLE[person]["role"] not in st.get("roles", []):
@@ -1144,6 +1190,8 @@ async def open_shared(fid: int, person: str, steps: list, lang: str, also_mac: b
                 "reply": await new_reply("file_gone", lang, also_mac)}
     title = lib.get(fid)["title"]
     steps = steps + [{"t": f"Found “{title}” in the shared folder", "ok": True}]
+    if phone:
+        return await offer_download(path, path.name, False, steps, lang, also_mac)
     if hub.helper is None:
         return {"status": "no_helper", "steps": steps + [{"t": "No helper is connected on the Mac", "ok": False}],
                 "reply": await new_reply("no_helper", lang, False)}
@@ -1155,6 +1203,110 @@ async def open_shared(fid: int, person: str, steps: list, lang: str, also_mac: b
     await hub.helper.send_json({"type": "open_file", "command_id": cid, "file_id": fileid,
                                 "filename": fileid + path.suffix.lower(), "token": ftoken})
     return {"status": "sent", "command": cid, "steps": steps + [{"t": "Sent to the Mac", "ok": True}]}
+
+
+# ---------------- files to the phone ----------------
+
+def to_phone(intent) -> bool:
+    """Asked from a phone and not "on my Mac": the file goes to the phone."""
+    c = CALLER.get()
+    if not c.get("session") or c.get("where") == "mac":
+        return False
+    from .commands import any_of
+    return not any_of(getattr(intent, "text", "") or "", apps.ON_MAC)
+
+
+def clean_downloads() -> None:
+    now = time.time()
+    for dl, d in list(hub.downloads.items()):
+        if now - d["at"] > DOWNLOAD_SECONDS:
+            drop_download(dl)
+
+
+def drop_download(dl: str) -> None:
+    d = hub.downloads.pop(dl, None)
+    if d and d["temp"]:
+        Path(d["path"]).unlink(missing_ok=True)
+
+
+async def offer_download(path: Path, name: str, temp: bool, steps: list, lang: str, also_mac: bool) -> dict:
+    """A one-time link (5 minutes) for the phone that asked. Only the file's name is shown or logged."""
+    clean_downloads()
+    path = Path(path)
+    size = path.stat().st_size if path.is_file() else -1
+    if not 0 <= size <= MAX_FILE:
+        if temp:
+            path.unlink(missing_ok=True)
+        return {"status": "failed", "steps": steps + [{"t": "That file is over 100 MB, or gone" if size > 0 else "That file is gone", "ok": False}],
+                "reply": await new_reply("failed", lang, also_mac)}
+    c = CALLER.get()
+    dl = secrets.token_urlsafe(24)
+    hub.downloads[dl] = {"path": str(path), "name": name, "temp": temp, "session": c.get("session"), "at": time.time(),
+                         "size": size, "asker": c.get("asker")}
+    hub.log.append("file.offered", actor="hub", content={"file": name, "size": f"{size // 1024} KB"})
+    return {"status": "file", "download": dl, "name": name, "size": size,
+            "steps": steps + [{"t": f"Ready on your phone: {name} ({max(1, size // 1024)} KB)", "ok": True}],
+            "reply": await new_reply("file_ready", lang, also_mac)}
+
+
+async def fetch_found(fid: str) -> dict | str:
+    """Ask the helper to send one file it found (by its one-time id). The path never leaves the helper."""
+    rid, tok = uuid.uuid4().hex[:12], secrets.token_urlsafe(24)
+    fut = asyncio.get_running_loop().create_future()
+    hub.uploads[rid] = {"token": tok, "future": fut}
+    await hub.helper.send_json({"type": "send_found", "request_id": rid, "found_id": fid, "upload": tok})
+    try:
+        return await asyncio.wait_for(fut, 90)
+    except asyncio.TimeoutError:
+        return "The Mac didn't send the file in time"
+    finally:
+        hub.uploads.pop(rid, None)
+
+
+@app.get("/api/file/{dl}")
+def get_file(dl: str, request: Request, x_session: str | None = Header(default=None)):
+    """The phone takes its file: once, within 5 minutes, only the phone it was made for."""
+    who(request, x_session)
+    clean_downloads()
+    d = hub.downloads.get(dl)
+    if d is None:
+        raise HTTPException(410, "That link has expired or was used. Ask again.")
+    if d["session"] and d["session"] != token_hash(x_session or ""):
+        hub.log.append("access.refused", actor="hub", content={"why": "file link for another phone"})
+        raise HTTPException(403, "That file was made ready for another phone")
+    hub.downloads.pop(dl)
+    s = hub.sessions.get(d["session"] or "", {})
+    hub.log.append("file.sent_to_phone", actor=PEOPLE.get(s.get("person") or "", {}).get("name", "this Mac"),
+                   content={"file": d["name"], "device": s.get("name", "this Mac")})
+    kind = mimetypes.guess_type(d["name"])[0] or "application/octet-stream"
+    gone = BackgroundTask(Path(d["path"]).unlink, missing_ok=True) if d["temp"] else None
+    return FileResponse(d["path"], media_type=kind, filename=d["name"], background=gone)
+
+
+@app.post("/helper/upload/{rid}")
+async def helper_upload(rid: str, request: Request, t: str = ""):
+    """The helper sends up one file the hub asked for (one-time token). Kept mode 600 in run/outbox/."""
+    if not is_local(request.client.host if request.client else None):
+        raise HTTPException(403, "Only the helper on this Mac can send files")
+    u = hub.uploads.get(rid)
+    if not u or not secrets.compare_digest(u["token"], t) or u["future"].done():
+        raise HTTPException(403, "Bad or used token")
+    name = Path(unquote(request.headers.get("x-name", "")) or "file").name[:120] or "file"
+    OUTBOX.mkdir(exist_ok=True, mode=0o700)
+    dest = OUTBOX / secrets.token_hex(12)
+    total = 0
+    with open(os.open(dest, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "wb") as f:
+        async for chunk in request.stream():
+            total += len(chunk)
+            if total > MAX_FILE:
+                break
+            f.write(chunk)
+    if total > MAX_FILE:
+        dest.unlink(missing_ok=True)
+        u["future"].set_result("That file is over 100 MB")
+        raise HTTPException(413, "Over 100 MB")
+    u["future"].set_result({"path": dest, "name": name, "size": total})
+    return {"ok": True}
 
 
 def mac_allowed(person: str) -> bool:
@@ -2102,6 +2254,11 @@ async def helper_ws(ws: WebSocket):
                 if fut and not fut.done():
                     fut.set_result({"items": msg.get("items") or [], "problems": msg.get("problems") or []})
                 continue
+            if msg.get("type") == "upload_done":
+                u = hub.uploads.get(str(msg.get("request_id")))
+                if u and not u["future"].done() and not msg.get("ok"):
+                    u["future"].set_result(str(msg.get("detail") or "The Mac couldn't send the file")[:160])
+                continue
             if msg.get("type") == "found":
                 fut = hub.finds.pop(str(msg.get("request_id")), None)
                 if fut and not fut.done():
@@ -2192,22 +2349,41 @@ async def serve() -> None:
     import uvicorn
     ip = lan_ip()
     cert, key = make_cert(ip)
+    ts = await asyncio.to_thread(tailnet.name)
+    ts_cert = await asyncio.to_thread(tailnet.cert, ts, RUN_DIR) if ts else None
     local = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=PORT, log_level="warning"))
-    wifi = uvicorn.Server(uvicorn.Config(app, host="0.0.0.0", port=SECURE_PORT, log_level="warning",
-                                         ssl_certfile=str(cert), ssl_keyfile=str(key)))
+    servers = [local]
+    wifi_port = SECURE_PORT
+    if ts_cert:
+        EXTRA_NAMES.add(ts)
+        servers.append(uvicorn.Server(uvicorn.Config(app, host="0.0.0.0", port=SECURE_PORT, log_level="warning",
+                                                     ssl_certfile=str(ts_cert[0]), ssl_keyfile=str(ts_cert[1]))))
+        wifi_port = SECURE_PORT + 1
+    servers.append(uvicorn.Server(uvicorn.Config(app, host="0.0.0.0", port=wifi_port, log_level="warning",
+                                                 ssl_certfile=str(cert), ssl_keyfile=str(key))))
     print("\n  Site Witness hub (helper demo)")
     print(f"  On this Mac:        http://localhost:{PORT}")
-    print(f"  On your phone:      https://{ip}:{SECURE_PORT}   (same Wi-Fi)")
-    print("                      First time: Chrome says “not private” → Advanced → Proceed. That’s this Mac’s own certificate.")
+    if ts_cert:
+        print(f"  On your phone:      https://{ts}:{SECURE_PORT}   (anywhere, through Tailscale; no warning)")
+        print("                      Then Share → Add to Home Screen for the app. Face ID works on this address.")
+        print(f"  Same Wi-Fi only:    https://{ip}:{wifi_port}   (self-signed: a warning, no Face ID)")
+    else:
+        print(f"  On your phone:      https://{ip}:{wifi_port}   (same Wi-Fi)")
+        print("                      First time: Chrome says “not private” → Advanced → Proceed. That’s this Mac’s own certificate.")
+        print("                      " + ("Tailscale is installed but not signed in, or HTTPS certificates are off in its admin page."
+                                         if tailnet.cli() else "For use from anywhere, with Face ID and the home-screen app: install Tailscale."))
     print(f"  Pairing code:       {hub.pair_code}")
     print("  A phone that enters the code waits until you tap Allow on this Mac's page.")
     print("  Stop with Ctrl+C\n", flush=True)
-    await asyncio.gather(local.serve(), wifi.serve(), keep_index_fresh())
+    await asyncio.gather(*(x.serve() for x in servers), keep_index_fresh())
 
 
 def main():
     RUN_DIR.mkdir(exist_ok=True)
     people_mod.load()
+    if OUTBOX.exists():  # files left from before a restart: their links are gone, so are they
+        for f in OUTBOX.iterdir():
+            f.unlink(missing_ok=True)
     hub.sessions_file = RUN_DIR / "sessions.json"
     hub.sessions = load_sessions(hub.sessions_file)
     hub.passkeys = passkeys.Store(RUN_DIR / "passkeys.json")

@@ -98,6 +98,34 @@ Then say “open the report about the cracked balcony”, “find lift” or «�
 - The 4 Records files still come first; the shared folder is searched when you say “about …” / “find …”, or when
   nothing in Records matches. A scanned PDF with no text inside is found only by its name (no OCR yet).
 
+## The phone app, from anywhere (Tailscale)
+
+1. Install **Tailscale** (free) on the Mac and on the phone, and sign in to the same account on both.
+2. In the Tailscale admin page (DNS), turn on **MagicDNS** and **HTTPS Certificates**.
+3. Run `./run-demo`. The hub finds its Tailscale name, gets a real certificate with `tailscale cert` (kept in
+   `run/`, never committed) and shows `https://<your-mac>.<tailnet>.ts.net:8443`. The plain Wi-Fi address moves to
+   port 8444.
+4. On the phone, open that address (it works on 4G too), then **Share → Add to Home Screen**. It opens full screen
+   like an app, and Face ID works.
+
+- Only your own Tailscale devices can reach the Mac. Nothing is opened to the internet.
+- We serve the certificate ourselves and never use `tailscale serve`. That command would make every phone look like
+  this Mac, which the hub trusts.
+- The app keeps only its own page and icons for offline use. Files, replies and results are never stored by it.
+
+## Files come to your phone
+
+From a phone, "open the Al Noor slides" or "find my CV" → tap a result → the file comes **to the phone**, with
+**Open**, **Save** and **Share…** buttons (WhatsApp, Mail and so on, with the phone's own share sheet). Say "… on my
+Mac", or tap **Open on the Mac instead**, to open it on the Mac.
+
+- The link works **once**, only for the phone that asked, and only for **5 minutes**. Files can be up to **100 MB**.
+- Whole-Mac files are for the owner only, after a fresh check (Face ID, or a tap on the Mac). Hidden, system, code
+  and secret files are never offered.
+- The helper sends the file up by its one-time id; the path never leaves the helper. The hub keeps the copy (mode
+  600, in `run/outbox/`) only until the phone has it, or for 5 minutes.
+- Each file offered or taken is logged by name and person, never by path.
+
 ## Pairing
 
 1. The phone types the 6-digit code from the terminal (a new code each run; `SW_PAIR_CODE` is no longer used).
