@@ -683,6 +683,7 @@ class Helper:
 
     def screenshot(self) -> str | None:
         shot = RUN_DIR / "proof.jpg"
+        shot.parent.mkdir(exist_ok=True)  # a fresh copy has no run/ yet
         shot.unlink(missing_ok=True)
         if self.run(["screencapture", "-x", "-t", "jpg", str(shot)]).returncode != 0 or not shot.exists():
             return None
